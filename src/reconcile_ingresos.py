@@ -39,6 +39,11 @@ def conciliar_ingresos_vs_banco(
     col_conc_ing = pick_column(ingresos, EGRESO_CONCEPTO_CANDIDATES)
     col_id_ing = pick_column(ingresos, INGRESO_ID_CANDIDATES)
 
+    col_metodo_pago = pick_column(
+        ingresos,
+        ["METODO PAGO", "METODO DE PAGO", "FORMA DE PAGO"]
+    )
+
     if not col_abono or not col_fecha_banco or not col_monto_ing:
         raise ValueError("Faltan columnas necesarias para conciliación de ingresos")
 
@@ -47,10 +52,8 @@ def conciliar_ingresos_vs_banco(
     # =============================
     banco = banco.copy()
     banco[col_abono] = to_money(banco[col_abono])
-    banco = banco[banco[col_abono] > 0]  # solo ingresos
+    banco = banco[banco[col_abono] > 0]
     banco[col_fecha_banco] = to_date(banco[col_fecha_banco])
-
-    # 🔒 FLAG DE USO (1 a 1)
     banco["__USADO__"] = False
 
     # =============================
@@ -73,15 +76,17 @@ def conciliar_ingresos_vs_banco(
     conciliados = 0
 
     # =============================
-    # CONCILIACIÓN 1 A 1 (CORRECTA)
+    # CONCILIACIÓN FINAL
     # =============================
     for i, ing in ingresos.iterrows():
         monto = ing.get(col_monto_ing)
-
         if pd.isna(monto):
             continue
 
-        # 🔥 SOLO MOVIMIENTOS NO USADOS
+        metodo_pago = ""
+        if col_metodo_pago:
+            metodo_pago = str(ing.get(col_metodo_pago, "")).upper()
+
         disponibles = banco[~banco["__USADO__"]]
 
         # 1️⃣ Buscar por MONTO
@@ -92,7 +97,7 @@ def conciliar_ingresos_vs_banco(
         if candidates.empty:
             continue
 
-        # 2️⃣ Filtro por ID_DOCUMENTO (si existe)
+        # 2️⃣ Buscar por ID_DOCUMENTO
         if col_id_ing:
             id_doc = str(ing.get(col_id_ing, "")).strip()
             if id_doc:
@@ -104,44 +109,42 @@ def conciliar_ingresos_vs_banco(
                 if not by_id.empty:
                     candidates = by_id
 
-        # 3️⃣ 🔥 PRIORIDAD ABSOLUTA: MOVIMIENTOS CON FECHA
+        # 3️⃣ Elegir mejor candidato
         with_date = candidates[pd.notna(candidates[col_fecha_banco])]
-        if not with_date.empty:
-            candidates_final = with_date
-        else:
-            candidates_final = candidates
+        candidates_final = with_date if not with_date.empty else candidates
 
-        # 4️⃣ SCORING FINAL
         def score_row(row):
             score = 0
-
             if col_fecha_ing and pd.notna(ing.get(col_fecha_ing)):
                 score -= abs((ing[col_fecha_ing] - row[col_fecha_banco]).days)
-
             if col_conc_ing and col_desc_banco:
                 score += fuzz.token_set_ratio(
                     str(ing.get(col_conc_ing, "")),
                     str(row.get(col_desc_banco, ""))
                 )
-
             return score
 
         candidates_final["__SCORE__"] = candidates_final.apply(score_row, axis=1)
         best = candidates_final.sort_values("__SCORE__", ascending=False).iloc[0]
 
-        # 🔒 MARCAR MOVIMIENTO COMO USADO
-        banco.loc[best.name, "__USADO__"] = True
+        # =============================
+        # REGLA PPD → NO COBRADO (SIN FECHA)
+        # =============================
+        if "PPD" in metodo_pago:
+            ingresos.at[i, "OBSERVACION"] = "PPD - Movimiento encontrado, no cobrado"
+            continue
 
-        # ✅ MARCAR INGRESO
+        # =============================
+        # PUE → COBRADO
+        # =============================
+        banco.loc[best.name, "__USADO__"] = True
         ingresos.at[i, "CONCILIADO_BANCO"] = "SI"
         ingresos.at[i, "ESTADO_INGRESO"] = "COBRADO"
 
         if pd.notna(best[col_fecha_banco]):
             ingresos.at[i, "FECHA_DE_COBRO"] = best[col_fecha_banco].strftime("%d/%m/%Y")
-            ingresos.at[i, "OBSERVACION"] = "Conciliado 1 a 1 con fecha bancaria"
-        else:
-            ingresos.at[i, "OBSERVACION"] = "Conciliado 1 a 1 sin fecha bancaria"
 
+        ingresos.at[i, "OBSERVACION"] = "PUE - Conciliado con fecha bancaria"
         conciliados += 1
 
     resumen = {
