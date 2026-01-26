@@ -3,4 +3,6 @@ venv/
 
 ## Ignora archivos compilados de Python 
 __pycache__/
-*.py[cod]
+*.pyc
+*.pyo
+
