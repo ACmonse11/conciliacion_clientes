@@ -51,8 +51,13 @@ def conciliar_egresos_vs_banco(
     egresos = egresos.copy()
     egresos[col_monto_egr] = to_money(egresos[col_monto_egr]).abs()
 
+    # 🔒 PRESERVAR FECHA ORIGINAL DEL DOCUMENTO
     if col_fecha_egr:
-        egresos[col_fecha_egr] = to_date(egresos[col_fecha_egr])
+        egresos["FECHA_EMISION"] = egresos[col_fecha_egr].astype(str)
+        egresos["_FECHA_EMISION_DT"] = to_date(egresos[col_fecha_egr])
+    else:
+        egresos["FECHA_EMISION"] = ""
+        egresos["_FECHA_EMISION_DT"] = pd.NaT
 
     # =============================
     # COLUMNAS RESULTADO
@@ -72,7 +77,7 @@ def conciliar_egresos_vs_banco(
             continue
 
         # ==================================================
-        # 1️⃣ EFECTIVO → NO PAGADO (regla absoluta)
+        # 1️⃣ EFECTIVO → NO PAGADO
         # ==================================================
         if col_forma_pago:
             forma = str(e.get(col_forma_pago, "")).upper()
@@ -82,7 +87,7 @@ def conciliar_egresos_vs_banco(
                 continue
 
         # ==================================================
-        # 2️⃣ BUSCAR EN BANCO POR MONTO + FECHA + TEXTO
+        # 2️⃣ BUSCAR EN BANCO
         # ==================================================
         candidatos = banco[
             (banco[col_cargo] - monto).abs() <= tolerancia
@@ -101,11 +106,12 @@ def conciliar_egresos_vs_banco(
         def score_row(row):
             score = 0.0
 
-            # fecha válida
-            score += 1000
+            score += 1000  # fecha válida
 
-            if col_fecha_egr and pd.notna(e.get(col_fecha_egr)):
-                diff_days = abs((e[col_fecha_egr] - row[col_fecha_banco]).days)
+            if col_fecha_egr and pd.notna(e["_FECHA_EMISION_DT"]):
+                diff_days = abs(
+                    (e["_FECHA_EMISION_DT"] - row[col_fecha_banco]).days
+                )
                 score += max(0, 300 - diff_days)
 
             if col_conc_egr and col_desc_banco:
@@ -120,13 +126,23 @@ def conciliar_egresos_vs_banco(
 
         egresos.at[i, "CONCILIADO_BANCO"] = "SI"
         egresos.at[i, "ESTADO_EGRESO"] = "PAGADO"
-        egresos.at[i, "FECHA_DE_PAGO"] = best[col_fecha_banco].strftime("%d/%m/%Y")
+        egresos.at[i, "FECHA_DE_PAGO"] = (
+            best[col_fecha_banco].strftime("%d/%m/%Y")
+            if pd.notna(best[col_fecha_banco])
+            else ""
+        )
         egresos.at[i, "OBSERVACION"] = "Conciliado con estado de cuenta"
 
+    # =============================
+    # RESUMEN
+    # =============================
     resumen = {
         "Egresos totales": int(len(egresos)),
         "Pagados": int((egresos["ESTADO_EGRESO"] == "PAGADO").sum()),
         "No pagados": int((egresos["ESTADO_EGRESO"] == "NO PAGADO").sum())
     }
+
+    # Limpieza columna técnica
+    egresos.drop(columns=["_FECHA_EMISION_DT"], inplace=True, errors="ignore")
 
     return egresos, resumen
