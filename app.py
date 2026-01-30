@@ -90,6 +90,8 @@ if st.button("Conciliar"):
     # =====================================
     banco = read_excel_any(banco_file)
     banco = banco.loc[:, ~banco.columns.str.contains("^UNNAMED", case=False)]
+    banco.columns = banco.columns.astype(str).str.upper().str.strip()
+
 
     # =====================================
     # ===== CONCILIACIONES
