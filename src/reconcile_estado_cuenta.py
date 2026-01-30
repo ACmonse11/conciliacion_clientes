@@ -1,114 +1,154 @@
+import re
 import pandas as pd
 
 from .preprocessing import pick_column, to_money, to_date
 from .config import (
     CARGO_COL_CANDIDATES,
-    EGRESO_MONTO_CANDIDATES
+    FECHA_COL_CANDIDATES,
+    EGRESO_MONTO_CANDIDATES,
 )
 
+RESTRICTED_PUE_FORMA = {
+    "EFECTIVO",
+    "TARJETA CREDITO",
+    "TARJETA CRÉDITO",
+    "CONDONACION",
+    "CONDONACIÓN",
+    "NOVACION",
+    "NOVACIÓN",
+}
 
-def conciliar_estado_cuenta_con_egresos(
+def _norm(x):
+    return re.sub(r"\s+", " ", str(x or "")).strip().upper()
+
+def _ensure_col(df, col, default=""):
+    if col not in df.columns:
+        df[col] = default
+    return col
+
+def _prepare(df):
+    df = df.copy()
+
+    col_monto = pick_column(df, EGRESO_MONTO_CANDIDATES)
+    col_folio = pick_column(df, ["FOLIO"])
+    col_fecha_em = pick_column(df, ["FECHA EMISION", "FECHA_EMISION"])
+    col_metodo = pick_column(df, ["METODO PAGO", "METODO DE PAGO"])
+    col_forma = pick_column(df, ["FORMA PAGO", "FORMA DE PAGO"])
+    col_estado = pick_column(df, ["ESTADO DE PAGO"])
+    col_fecha_pago = pick_column(df, ["FECHA DE PAGO"])
+
+    if not col_monto:
+        raise ValueError("No se encontró columna de monto")
+
+    if not col_estado:
+        col_estado = _ensure_col(df, "ESTADO DE PAGO", "")
+    if not col_fecha_pago:
+        col_fecha_pago = _ensure_col(df, "FECHA DE PAGO", "")
+
+    df[col_monto] = to_money(df[col_monto]).abs()
+    if col_fecha_em:
+        df[col_fecha_em] = to_date(df[col_fecha_em])
+
+    df["_USADO_"] = False
+    if col_fecha_em:
+        df = df.sort_values(col_fecha_em)
+
+    return {
+        "df": df,
+        "monto": col_monto,
+        "folio": col_folio,
+        "fecha_em": col_fecha_em,
+        "metodo": col_metodo,
+        "forma": col_forma,
+        "estado": col_estado,
+        "fecha_pago": col_fecha_pago,
+    }
+
+def conciliar_estado_cuenta_con_movimientos(
     banco: pd.DataFrame,
+    ingresos: pd.DataFrame,
     egresos: pd.DataFrame,
-    tolerancia: float = 0.01
+    tolerancia: float = 0.01,
 ):
-    # =============================
-    # COLUMNAS BANCO
-    # =============================
-    col_cargo_banco = pick_column(banco, CARGO_COL_CANDIDATES)
-
-    col_folio_factura_banco = pick_column(
-        banco,
-        ["FOLIO FACTURA", "FOLIO_FACTURA", "FACTURA"]
-    )
-
-    col_fecha_factura_banco = pick_column(
-        banco,
-        ["FECHA FACTURA", "FECHA_FACTURA"]
-    )
-
-    # Si no existen, las creamos
-    if not col_folio_factura_banco:
-        banco["FOLIO FACTURA"] = ""
-        col_folio_factura_banco = "FOLIO FACTURA"
-
-    if not col_fecha_factura_banco:
-        banco["FECHA FACTURA"] = ""
-        col_fecha_factura_banco = "FECHA FACTURA"
-
-    # =============================
-    # COLUMNAS EGRESOS
-    # =============================
-    col_monto_egreso = pick_column(egresos, EGRESO_MONTO_CANDIDATES)
-
-    col_folio_egreso = pick_column(
-        egresos,
-        ["FOLIO", "FOLIO FACTURA", "FACTURA", "NO_FACTURA"]
-    )
-
-    col_fecha_emision_egreso = pick_column(
-        egresos,
-        ["FECHA EMISION", "FECHA_EMISION", "FECHA FACTURA", "FECHA"]
-    )
-
-    if not col_cargo_banco or not col_monto_egreso:
-        raise ValueError("No se encontraron columnas necesarias")
-
-    # =============================
-    # NORMALIZAR DATOS
-    # =============================
     banco = banco.copy()
-    banco[col_cargo_banco] = to_money(banco[col_cargo_banco]).abs()
 
-    egresos = egresos.copy()
-    egresos[col_monto_egreso] = to_money(egresos[col_monto_egreso]).abs()
+    col_cargo = pick_column(banco, CARGO_COL_CANDIDATES)
+    col_fecha_banco = pick_column(banco, FECHA_COL_CANDIDATES)
 
-    if col_fecha_emision_egreso:
-        egresos[col_fecha_emision_egreso] = to_date(
-            egresos[col_fecha_emision_egreso]
-        )
+    if not col_cargo or not col_fecha_banco:
+        raise ValueError("Banco: faltan columnas de cargos o fecha")
 
-    # =============================
-    # PREPARAR EGRESOS (ordenados)
-    # =============================
-    egresos["_USADO_"] = False
+    col_folio_fact = pick_column(banco, ["FOLIO FACTURA"])
+    col_fecha_fact = pick_column(banco, ["FECHA FACTURA"])
 
-    if col_fecha_emision_egreso:
-        egresos = egresos.sort_values(col_fecha_emision_egreso)
+    if not col_folio_fact:
+        col_folio_fact = _ensure_col(banco, "FOLIO FACTURA", "")
+    if not col_fecha_fact:
+        col_fecha_fact = _ensure_col(banco, "FECHA FACTURA", "")
 
-    # =============================
-    # CONCILIACIÓN POR MONTO (SECUENCIAL)
-    # =============================
-    for i, row_banco in banco.iterrows():
-        monto_banco = row_banco[col_cargo_banco]
+    banco[col_cargo] = to_money(banco[col_cargo]).abs()
+    banco[col_fecha_banco] = to_date(banco[col_fecha_banco])
 
-        if pd.isna(monto_banco) or monto_banco <= 0:
-            continue
+    ing = _prepare(ingresos)
+    egr = _prepare(egresos)
 
-        candidatos = egresos[
-            (~egresos["_USADO_"]) &
-            ((egresos[col_monto_egreso] - monto_banco).abs() <= tolerancia)
+    def match(pack, monto, fecha_pago):
+        df = pack["df"]
+        cand = df[
+            (~df["_USADO_"]) &
+            ((df[pack["monto"]] - monto).abs() <= tolerancia)
         ]
 
-        if candidatos.empty:
+        if cand.empty:
+            return None
+
+        row = cand.iloc[0]
+
+        metodo = _norm(row.get(pack["metodo"]))
+        forma = _norm(row.get(pack["forma"]))
+
+        if "PPD" in metodo:
+            df.at[row.name, pack["estado"]] = "NO PAGADO"
+            df.at[row.name, pack["fecha_pago"]] = ""
+            df.at[row.name, "_USADO_"] = True
+            return None
+
+        if "PUE" in metodo and any(x in forma for x in RESTRICTED_PUE_FORMA):
+            df.at[row.name, pack["estado"]] = "NO PAGADO"
+            df.at[row.name, pack["fecha_pago"]] = ""
+            df.at[row.name, "_USADO_"] = True
+            return None
+
+        df.at[row.name, pack["estado"]] = "PAGADO"
+        df.at[row.name, pack["fecha_pago"]] = (
+            fecha_pago.strftime("%d/%m/%Y") if pd.notna(fecha_pago) else ""
+        )
+        df.at[row.name, "_USADO_"] = True
+        return row, pack
+
+    for i, b in banco.iterrows():
+        monto = b[col_cargo]
+        if pd.isna(monto) or monto <= 0:
             continue
 
-        # Tomar el PRIMERO disponible
-        egreso = candidatos.iloc[0]
+        fecha_pago = b[col_fecha_banco]
 
-        banco.at[i, col_folio_factura_banco] = str(
-            egreso.get(col_folio_egreso, "")
-        )
+        res = match(egr, monto, fecha_pago)
+        if not res:
+            res = match(ing, monto, fecha_pago)
 
-        if col_fecha_emision_egreso and pd.notna(
-            egreso.get(col_fecha_emision_egreso)
-        ):
-            banco.at[i, col_fecha_factura_banco] = (
-                egreso[col_fecha_emision_egreso].strftime("%d/%m/%Y")
-            )
+        if not res:
+            continue
 
-        egresos.at[egreso.name, "_USADO_"] = True
+        row, pack = res
 
-    banco = banco.drop(columns=[], errors="ignore")
+        if pack["folio"]:
+            banco.at[i, col_folio_fact] = row.get(pack["folio"], "")
 
-    return banco
+        if pack["fecha_em"] and pd.notna(row.get(pack["fecha_em"])):
+            banco.at[i, col_fecha_fact] = row[pack["fecha_em"]].strftime("%d/%m/%Y")
+
+    ing["df"].drop(columns=["_USADO_"], inplace=True, errors="ignore")
+    egr["df"].drop(columns=["_USADO_"], inplace=True, errors="ignore")
+
+    return banco, ing["df"], egr["df"]
