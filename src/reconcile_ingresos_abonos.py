@@ -35,11 +35,12 @@ def conciliar_ingresos_con_abonos(
     col_fecha_banco = pick_column(banco, ["FECHA"])
 
     col_folio_fact = pick_column(banco, ["FOLIO FACTURA"])
+    col_fecha_fact = pick_column(banco, ["FECHA FACTURA"])
+
     if not col_folio_fact:
         banco["FOLIO FACTURA"] = ""
         col_folio_fact = "FOLIO FACTURA"
 
-    col_fecha_fact = pick_column(banco, ["FECHA FACTURA"])
     if not col_fecha_fact:
         banco["FECHA FACTURA"] = ""
         col_fecha_fact = "FECHA FACTURA"
@@ -75,46 +76,53 @@ def conciliar_ingresos_con_abonos(
         if pd.isna(total) or total <= 0:
             continue
 
-        movimientos = pd.DataFrame()
-
-        # Buscar en ABONOS
-        if col_abono:
-            movimientos = banco[
-                (~banco["_USADO_ING_"]) &
-                ((banco[col_abono] - total).abs() <= tolerancia)
-            ]
-
-        # Si no encontró, buscar en CARGOS
-        if movimientos.empty and col_cargo:
-            movimientos = banco[
-                (~banco["_USADO_ING_"]) &
+        # Buscar movimientos por monto
+        movimientos = banco[
+            (~banco["_USADO_ING_"]) &
+            (
+                ((banco[col_abono] - total).abs() <= tolerancia) |
                 ((banco[col_cargo] - total).abs() <= tolerancia)
-            ]
+            )
+        ]
 
-        if movimientos.empty:
+        if len(movimientos) < 2:
             continue
 
-        mov = movimientos.iloc[0]
+        # 🔑 Identificar origen (el que YA tiene fecha)
+        origen = movimientos[
+            movimientos[col_fecha_fact].notna() &
+            (movimientos[col_fecha_fact] != "")
+        ]
+
+        destino = movimientos[
+            (movimientos[col_fecha_fact].isna()) |
+            (movimientos[col_fecha_fact] == "")
+        ]
+
+        if origen.empty or destino.empty:
+            continue
+
+        origen = origen.iloc[0]
+        destino = destino.iloc[0]
 
         # ===============================
-        # MARCAR INGRESO COMO PAGADO
+        # COPIAR DATOS CORRECTOS
+        # ===============================
+        banco.at[destino.name, col_folio_fact] = origen[col_folio_fact]
+
+        if pd.notna(origen[col_fecha_fact]):
+            banco.at[destino.name, col_fecha_fact] = origen[col_fecha_fact]
+
+        banco.at[destino.name, "_USADO_ING_"] = True
+
+        # ===============================
+        # MARCAR INGRESO
         # ===============================
         ingresos.at[i, col_estado] = "PAGADO"
-        ingresos.at[i, col_fecha_pago] = (
-            mov[col_fecha_banco].strftime("%d/%m/%Y")
-        )
 
-        # ===============================
-        # ESCRIBIR EN BANCO
-        # ===============================
-        banco.at[mov.name, col_folio_fact] = ing.get(col_folio_ing, "")
-
-        if col_fecha_em and pd.notna(ing.get(col_fecha_em)):
-            banco.at[mov.name, col_fecha_fact] = (
-                ing[col_fecha_em].strftime("%d/%m/%Y")
-            )
-
-        banco.at[mov.name, "_USADO_ING_"] = True
+        fecha_pago = origen.get(col_fecha_banco)
+        if pd.notna(fecha_pago):
+            ingresos.at[i, col_fecha_pago] = fecha_pago.strftime("%d/%m/%Y")
 
     banco.drop(columns=["_USADO_ING_"], inplace=True, errors="ignore")
     return ingresos
