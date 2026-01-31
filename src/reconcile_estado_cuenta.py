@@ -1,12 +1,8 @@
 import re
 import pandas as pd
-
 from .preprocessing import pick_column, to_money, to_date
-from .config import (
-    CARGO_COL_CANDIDATES,
-    FECHA_COL_CANDIDATES,
-    EGRESO_MONTO_CANDIDATES,
-)
+from .config import CARGO_COL_CANDIDATES, FECHA_COL_CANDIDATES, EGRESO_MONTO_CANDIDATES
+
 
 RESTRICTED_PUE_FORMA = {
     "EFECTIVO",
@@ -18,13 +14,16 @@ RESTRICTED_PUE_FORMA = {
     "NOVACIÓN",
 }
 
+
 def _norm(x):
     return re.sub(r"\s+", " ", str(x or "")).strip().upper()
+
 
 def _ensure_col(df, col, default=""):
     if col not in df.columns:
         df[col] = default
     return col
+
 
 def _prepare(df):
     df = df.copy()
@@ -32,10 +31,10 @@ def _prepare(df):
     col_monto = pick_column(df, EGRESO_MONTO_CANDIDATES)
     col_folio = pick_column(df, ["FOLIO"])
     col_fecha_em = pick_column(df, ["FECHA EMISION", "FECHA_EMISION"])
-    col_metodo = pick_column(df, ["METODO PAGO", "METODO DE PAGO"])
-    col_forma = pick_column(df, ["FORMA PAGO", "FORMA DE PAGO"])
-    col_estado = pick_column(df, ["ESTADO DE PAGO"])
-    col_fecha_pago = pick_column(df, ["FECHA DE PAGO"])
+    col_metodo = pick_column(df, ["METODO PAGO", "METODO DE PAGO", "METODO_PAGO"])
+    col_forma = pick_column(df, ["FORMA PAGO", "FORMA DE PAGO", "FORMA_PAGO"])
+    col_estado = pick_column(df, ["ESTADO DE PAGO", "ESTADO_PAGO"])
+    col_fecha_pago = pick_column(df, ["FECHA DE PAGO", "FECHA_PAGO"])
 
     if not col_monto:
         raise ValueError("No se encontró columna de monto")
@@ -46,10 +45,12 @@ def _prepare(df):
         col_fecha_pago = _ensure_col(df, "FECHA DE PAGO", "")
 
     df[col_monto] = to_money(df[col_monto]).abs()
+
     if col_fecha_em:
         df[col_fecha_em] = to_date(df[col_fecha_em])
 
     df["_USADO_"] = False
+
     if col_fecha_em:
         df = df.sort_values(col_fecha_em)
 
@@ -64,6 +65,7 @@ def _prepare(df):
         "fecha_pago": col_fecha_pago,
     }
 
+
 def conciliar_estado_cuenta_con_movimientos(
     banco: pd.DataFrame,
     ingresos: pd.DataFrame,
@@ -73,23 +75,20 @@ def conciliar_estado_cuenta_con_movimientos(
     banco = banco.copy()
     banco.columns = banco.columns.astype(str).str.upper().str.strip()
 
-    col_cargo = pick_column(banco, ["CARGO", "CARGOS"])
+    col_cargo = pick_column(banco, CARGO_COL_CANDIDATES)
     col_abono = pick_column(banco, ["ABONO", "ABONOS"])
-    col_fecha_banco = pick_column(banco, ["FECHA"])
+    col_fecha_banco = pick_column(banco, FECHA_COL_CANDIDATES)
 
     if not col_fecha_banco:
-        raise ValueError("Banco: falta FECHA")
+        raise ValueError("Banco: falta columna FECHA")
 
     col_folio_fact = pick_column(banco, ["FOLIO FACTURA"])
     col_fecha_fact = pick_column(banco, ["FECHA FACTURA"])
 
     if not col_folio_fact:
-        banco["FOLIO FACTURA"] = ""
-        col_folio_fact = "FOLIO FACTURA"
-
+        col_folio_fact = _ensure_col(banco, "FOLIO FACTURA", "")
     if not col_fecha_fact:
-        banco["FECHA FACTURA"] = ""
-        col_fecha_fact = "FECHA FACTURA"
+        col_fecha_fact = _ensure_col(banco, "FECHA FACTURA", "")
 
     if col_cargo:
         banco[col_cargo] = to_money(banco[col_cargo]).abs()
@@ -103,6 +102,7 @@ def conciliar_estado_cuenta_con_movimientos(
 
     def match(pack, monto, fecha_pago):
         df = pack["df"]
+
         cand = df[
             (~df["_USADO_"]) &
             ((df[pack["monto"]] - monto).abs() <= tolerancia)
@@ -113,50 +113,71 @@ def conciliar_estado_cuenta_con_movimientos(
 
         row = cand.iloc[0]
 
+        metodo = _norm(row.get(pack["metodo"]))
+        forma = _norm(row.get(pack["forma"]))
+
+        # ==========================
+        # 🚨 PPD → NO PAGADO
+        # ==========================
+        if "PPD" in metodo:
+            df.at[row.name, pack["estado"]] = "NO PAGADO"
+            df.at[row.name, pack["fecha_pago"]] = ""
+            df.at[row.name, "_USADO_"] = True
+            return row, "PPD", pack
+
+        # ==========================
+        # RESTRICCIONES PUE
+        # ==========================
+        if "PUE" in metodo and any(x in forma for x in RESTRICTED_PUE_FORMA):
+            df.at[row.name, pack["estado"]] = "NO PAGADO"
+            df.at[row.name, pack["fecha_pago"]] = ""
+            df.at[row.name, "_USADO_"] = True
+            return row, "NO_PAGADO", pack
+
+        # ==========================
+        # NORMAL → PAGADO
+        # ==========================
         df.at[row.name, pack["estado"]] = "PAGADO"
         df.at[row.name, pack["fecha_pago"]] = (
             fecha_pago.strftime("%d/%m/%Y") if pd.notna(fecha_pago) else ""
         )
         df.at[row.name, "_USADO_"] = True
-        return row
+        return row, "PAGADO", pack
 
     for i, b in banco.iterrows():
         fecha_pago = b[col_fecha_banco]
 
-        # =========================
-        # EGRESOS → CARGOS
-        # =========================
+        res = None
+
         if col_cargo and pd.notna(b[col_cargo]) and b[col_cargo] > 0:
-            row_egr = match(egr, b[col_cargo], fecha_pago)
-            if row_egr is not None:
-                if egr["folio"]:
-                    if pd.isna(banco.at[i, col_folio_fact]) or banco.at[i, col_folio_fact] == "":
-                        banco.at[i, col_folio_fact] = row_egr.get(egr["folio"], "")
+            res = match(egr, b[col_cargo], fecha_pago)
 
-                if egr["fecha_em"] and pd.notna(row_egr.get(egr["fecha_em"])):
-                    if pd.isna(banco.at[i, col_fecha_fact]) or banco.at[i, col_fecha_fact] == "":
-                        banco.at[i, col_fecha_fact] = (
-                            row_egr[egr["fecha_em"]].strftime("%d/%m/%Y")
-                        )
+        if not res and col_abono and pd.notna(b[col_abono]) and b[col_abono] > 0:
+            res = match(ing, b[col_abono], fecha_pago)
 
-        # =========================
-        # INGRESOS → ABONOS
-        # =========================
-        if col_abono and pd.notna(b[col_abono]) and b[col_abono] > 0:
-            row_ing = match(ing, b[col_abono], fecha_pago)
-            if row_ing is not None:
-                if ing["folio"]:
-                    if pd.isna(banco.at[i, col_folio_fact]) or banco.at[i, col_folio_fact] == "":
-                        banco.at[i, col_folio_fact] = row_ing.get(ing["folio"], "")
+        if not res:
+            continue
 
-                if ing["fecha_em"] and pd.notna(row_ing.get(ing["fecha_em"])):
-                    if pd.isna(banco.at[i, col_fecha_fact]) or banco.at[i, col_fecha_fact] == "":
-                        banco.at[i, col_fecha_fact] = (
-                            row_ing[ing["fecha_em"]].strftime("%d/%m/%Y")
-                        )
+        row, status, pack = res
+
+        # ==========================
+        # BANCO: FOLIO SIEMPRE
+        # ==========================
+        if pack["folio"]:
+            banco.at[i, col_folio_fact] = row.get(pack["folio"], "")
+
+        # ==========================
+        # BANCO: FECHA FACTURA
+        # ==========================
+        if status == "PAGADO":
+            if pack["fecha_em"] and pd.notna(row.get(pack["fecha_em"])):
+                banco.at[i, col_fecha_fact] = (
+                    row[pack["fecha_em"]].strftime("%d/%m/%Y")
+                )
+        else:
+            banco.at[i, col_fecha_fact] = ""
 
     ing["df"].drop(columns=["_USADO_"], inplace=True, errors="ignore")
     egr["df"].drop(columns=["_USADO_"], inplace=True, errors="ignore")
 
     return banco, ing["df"], egr["df"]
-
