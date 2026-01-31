@@ -27,6 +27,7 @@ def _ensure_col(df, col, default=""):
 
 def _prepare(df):
     df = df.copy()
+    df.columns = df.columns.astype(str).str.upper().str.strip()
 
     col_monto = pick_column(df, EGRESO_MONTO_CANDIDATES)
     col_folio = pick_column(df, ["FOLIO"])
@@ -111,71 +112,79 @@ def conciliar_estado_cuenta_con_movimientos(
         if cand.empty:
             return None
 
-        row = cand.iloc[0]
+        # Orden por fecha emisión si existe
+        if pack["fecha_em"]:
+            cand = cand.sort_values(pack["fecha_em"])
 
-        metodo = _norm(row.get(pack["metodo"]))
-        forma = _norm(row.get(pack["forma"]))
+        # ✅ Preferir NO-PPD; PPD solo si no hay otra opción
+        fallback_ppd = None
 
-        # ==========================
-        # 🚨 PPD → NO PAGADO
-        # ==========================
-        if "PPD" in metodo:
-            df.at[row.name, pack["estado"]] = "NO PAGADO"
-            df.at[row.name, pack["fecha_pago"]] = ""
-            df.at[row.name, "_USADO_"] = True
+        for idx, row in cand.iterrows():
+            metodo = _norm(row.get(pack["metodo"]))
+            forma = _norm(row.get(pack["forma"]))
+
+            # Guardar primer PPD como fallback, pero NO usarlo todavía
+            if "PPD" in metodo:
+                if fallback_ppd is None:
+                    fallback_ppd = (idx, row)
+                continue
+
+            # Restricciones PUE (se marca NO PAGADO y se usa)
+            if "PUE" in metodo and any(x in forma for x in RESTRICTED_PUE_FORMA):
+                df.at[idx, pack["estado"]] = "NO PAGADO"
+                df.at[idx, pack["fecha_pago"]] = ""
+                df.at[idx, "_USADO_"] = True
+                return row, "NO_PAGADO", pack
+
+            # Normal PAGADO
+            df.at[idx, pack["estado"]] = "PAGADO"
+            df.at[idx, pack["fecha_pago"]] = (
+                fecha_pago.strftime("%d/%m/%Y") if pd.notna(fecha_pago) else ""
+            )
+            df.at[idx, "_USADO_"] = True
+            return row, "PAGADO", pack
+
+        # Si no hubo opción NO-PPD, usar el PPD fallback
+        if fallback_ppd is not None:
+            idx, row = fallback_ppd
+            df.at[idx, pack["estado"]] = "NO PAGADO"
+            df.at[idx, pack["fecha_pago"]] = ""
+            df.at[idx, "_USADO_"] = True
             return row, "PPD", pack
 
-        # ==========================
-        # RESTRICCIONES PUE
-        # ==========================
-        if "PUE" in metodo and any(x in forma for x in RESTRICTED_PUE_FORMA):
-            df.at[row.name, pack["estado"]] = "NO PAGADO"
-            df.at[row.name, pack["fecha_pago"]] = ""
-            df.at[row.name, "_USADO_"] = True
-            return row, "NO_PAGADO", pack
-
-        # ==========================
-        # NORMAL → PAGADO
-        # ==========================
-        df.at[row.name, pack["estado"]] = "PAGADO"
-        df.at[row.name, pack["fecha_pago"]] = (
-            fecha_pago.strftime("%d/%m/%Y") if pd.notna(fecha_pago) else ""
-        )
-        df.at[row.name, "_USADO_"] = True
-        return row, "PAGADO", pack
+        return None
 
     for i, b in banco.iterrows():
         fecha_pago = b[col_fecha_banco]
 
         res = None
+        pack_usado = None
 
-        if col_cargo and pd.notna(b[col_cargo]) and b[col_cargo] > 0:
+        # EGRESOS → CARGOS
+        if col_cargo and pd.notna(b.get(col_cargo)) and b[col_cargo] > 0:
             res = match(egr, b[col_cargo], fecha_pago)
+            pack_usado = egr if res else None
 
-        if not res and col_abono and pd.notna(b[col_abono]) and b[col_abono] > 0:
+        # INGRESOS → ABONOS
+        if not res and col_abono and pd.notna(b.get(col_abono)) and b[col_abono] > 0:
             res = match(ing, b[col_abono], fecha_pago)
+            pack_usado = ing if res else None
 
         if not res:
             continue
 
         row, status, pack = res
 
-        # ==========================
-        # BANCO: FOLIO SIEMPRE
-        # ==========================
+        # ✅ Banco: FOLIO siempre
         if pack["folio"]:
             banco.at[i, col_folio_fact] = row.get(pack["folio"], "")
 
-        # ==========================
-        # BANCO: FECHA FACTURA
-        # ==========================
+        # ✅ Banco: Fecha factura solo si PAGADO (NO para PPD)
         if status == "PAGADO":
             if pack["fecha_em"] and pd.notna(row.get(pack["fecha_em"])):
-                banco.at[i, col_fecha_fact] = (
-                    row[pack["fecha_em"]].strftime("%d/%m/%Y")
-                )
+                banco.at[i, col_fecha_fact] = row[pack["fecha_em"]].strftime("%d/%m/%Y")
         else:
-            banco.at[i, col_fecha_fact] = ""
+            banco.at[i, col_fecha_fact] = ""  # PPD / NO_PAGADO
 
     ing["df"].drop(columns=["_USADO_"], inplace=True, errors="ignore")
     egr["df"].drop(columns=["_USADO_"], inplace=True, errors="ignore")

@@ -79,11 +79,17 @@ if st.button("Conciliar"):
         df = df.loc[:, ~df.columns.str.contains("^UNNAMED", case=False)]
         egresos_sheets[sheet] = df
 
-    if "ACUMULADO" not in egresos_sheets:
-        st.error("El archivo de EGRESOS debe tener una hoja llamada 'ACUMULADO'")
+    if "ACUMULADO" not in egresos_sheets and "EGRESOS" not in egresos_sheets:
+        st.error("El archivo de EGRESOS debe tener una hoja llamada 'ACUMULADO o EGRESOS'")
         st.stop()
 
-    egresos_acumulado = egresos_sheets["ACUMULADO"]
+    if "ACUMULADO" in egresos_sheets:
+        egresos_acumulado = egresos_sheets["ACUMULADO"]
+    elif "EGRESOS" in egresos_sheets:
+        egresos_acumulado = egresos_sheets["EGRESOS"]
+    else:
+        st.error("El archivo de EGRESOS debe tener una hoja llamada 'ACUMULADO' o 'EGRESOS'")
+        st.stop()
 
     # =====================================
     # ===== BANCO
