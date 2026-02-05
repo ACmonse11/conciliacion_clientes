@@ -1,8 +1,8 @@
-import re
 import pandas as pd
 from .preprocessing import pick_column, to_money, to_date
-from .config import CARGO_COL_CANDIDATES, FECHA_COL_CANDIDATES, EGRESO_MONTO_CANDIDATES
+from .config import CARGO_COL_CANDIDATES, FECHA_COL_CANDIDATES
 from .reconcile import conciliar_egresos_vs_banco
+from .utils_orden import mover_cancelados_al_final
 
 
 def conciliar_estado_cuenta_con_movimientos(
@@ -25,11 +25,16 @@ def conciliar_estado_cuenta_con_movimientos(
 
     banco[col_fecha] = to_date(banco[col_fecha])
 
-    # 🔑 Conciliar egresos (incluye EFECTIVO → PAGADO OTRO)
+    # 🔹 Conciliación de egresos (incluye EFECTIVO → PAGADO OTRO)
     egresos_out, _ = conciliar_egresos_vs_banco(
         egresos=egresos,
         banco=banco,
         tolerancia=tolerancia
     )
+
+    # 🔹 ORDEN FINAL (CANCELADOS ABAJO)
+    ingresos = mover_cancelados_al_final(ingresos)
+    egresos_out = mover_cancelados_al_final(egresos_out)
+    banco = mover_cancelados_al_final(banco)
 
     return banco, ingresos, egresos_out

@@ -10,6 +10,7 @@ from .config import (
     EGRESO_CONCEPTO_CANDIDATES
 )
 from .preprocessing import pick_column, to_money, to_date
+from .utils_orden import mover_cancelados_al_final
 
 
 def conciliar_egresos_vs_banco(
@@ -29,9 +30,6 @@ def conciliar_egresos_vs_banco(
         ["FORMA PAGO", "FORMA DE PAGO", "METODO DE PAGO"]
     )
 
-    if not col_cargo or not col_monto_egr:
-        raise ValueError("No se encontraron columnas necesarias para egresos")
-
     banco = banco.copy()
     banco[col_cargo] = to_money(banco[col_cargo]).abs()
     banco[col_fecha_banco] = to_date(banco[col_fecha_banco])
@@ -40,10 +38,8 @@ def conciliar_egresos_vs_banco(
     egresos[col_monto_egr] = to_money(egresos[col_monto_egr]).abs()
 
     if col_fecha_egr:
-        egresos["FECHA_EMISION"] = egresos[col_fecha_egr].astype(str)
         egresos["_FECHA_EMISION_DT"] = to_date(egresos[col_fecha_egr])
     else:
-        egresos["FECHA_EMISION"] = ""
         egresos["_FECHA_EMISION_DT"] = pd.NaT
 
     egresos["CONCILIADO_BANCO"] = "NO"
@@ -56,6 +52,7 @@ def conciliar_egresos_vs_banco(
         if pd.isna(monto):
             continue
 
+        # ✅ EFECTIVO → PAGADO OTRO (SIN FECHA)
         if col_forma_pago:
             forma = str(e.get(col_forma_pago, "")).upper().strip()
             if "EFECTIVO" in forma or forma == "01":
@@ -73,15 +70,16 @@ def conciliar_egresos_vs_banco(
             continue
 
         candidatos = candidatos[pd.notna(candidatos[col_fecha_banco])]
-        if candidatos.empty:
-            continue
 
         def score(row):
             s = 1000
             if col_fecha_egr and pd.notna(e["_FECHA_EMISION_DT"]):
-                s += max(0, 300 - abs(
-                    (e["_FECHA_EMISION_DT"] - row[col_fecha_banco]).days
-                ))
+                s += max(
+                    0,
+                    300 - abs(
+                        (e["_FECHA_EMISION_DT"] - row[col_fecha_banco]).days
+                    )
+                )
             if col_conc_egr and col_desc_banco:
                 s += fuzz.token_set_ratio(
                     str(e.get(col_conc_egr, "")),
@@ -99,6 +97,9 @@ def conciliar_egresos_vs_banco(
         egresos.at[i, "OBSERVACION"] = "Conciliado con estado de cuenta"
 
     egresos.drop(columns=["_FECHA_EMISION_DT"], inplace=True, errors="ignore")
+
+    # 🔹 ORDEN FINAL
+    egresos = mover_cancelados_al_final(egresos)
 
     resumen = {
         "Egresos totales": len(egresos),
