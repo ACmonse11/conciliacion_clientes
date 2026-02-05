@@ -15,9 +15,10 @@ def to_money(series):
     return pd.to_numeric(s, errors="coerce")
 
 def to_date(series):
-    fechas = pd.to_datetime(series, errors="coerce", dayfirst=True)
-    mask = fechas.isna()
+    # Primero intentar ISO / normal
+    fechas = pd.to_datetime(series, errors="coerce")
 
+    mask = fechas.isna()
     if mask.any():
         numeric = pd.to_numeric(series, errors="coerce")
         fechas.loc[mask & numeric.notna()] = pd.to_datetime(
@@ -26,4 +27,5 @@ def to_date(series):
             origin="1899-12-30",
             errors="coerce"
         )
+
     return fechas
