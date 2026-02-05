@@ -109,7 +109,7 @@ def conciliar_estado_cuenta_con_movimientos(
     )
 
     ing = _prepare(ingresos)
-    egr = _prepare(egresos)
+    egr = _prepare(egresos_conciliados)
 
     def match(pack, monto, fecha_pago):
         df = pack["df"]
