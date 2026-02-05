@@ -2,6 +2,9 @@ import re
 import pandas as pd
 from .preprocessing import pick_column, to_money, to_date
 from .config import CARGO_COL_CANDIDATES, FECHA_COL_CANDIDATES, EGRESO_MONTO_CANDIDATES
+from .reconcile import conciliar_egresos_vs_banco
+from .utils_orden import mover_cancelados_al_final
+
 
 
 RESTRICTED_PUE_FORMA = {
@@ -98,6 +101,13 @@ def conciliar_estado_cuenta_con_movimientos(
 
     banco[col_fecha_banco] = to_date(banco[col_fecha_banco])
 
+    # 🔹 1) Conciliación previa de egresos vs banco (EFECTIVO → PAGADO OTRO)
+    egresos_conciliados, _ = conciliar_egresos_vs_banco(
+        egresos=egresos,
+        banco=banco,
+        tolerancia=tolerancia,
+    )
+
     ing = _prepare(ingresos)
     egr = _prepare(egresos)
 
@@ -158,17 +168,14 @@ def conciliar_estado_cuenta_con_movimientos(
         fecha_pago = b[col_fecha_banco]
 
         res = None
-        pack_usado = None
 
         # EGRESOS → CARGOS
         if col_cargo and pd.notna(b.get(col_cargo)) and b[col_cargo] > 0:
             res = match(egr, b[col_cargo], fecha_pago)
-            pack_usado = egr if res else None
 
         # INGRESOS → ABONOS
         if not res and col_abono and pd.notna(b.get(col_abono)) and b[col_abono] > 0:
             res = match(ing, b[col_abono], fecha_pago)
-            pack_usado = ing if res else None
 
         if not res:
             continue
@@ -189,4 +196,9 @@ def conciliar_estado_cuenta_con_movimientos(
     ing["df"].drop(columns=["_USADO_"], inplace=True, errors="ignore")
     egr["df"].drop(columns=["_USADO_"], inplace=True, errors="ignore")
 
-    return banco, ing["df"], egr["df"]
+    # 🔹 2) Orden final: CANCELADOS al final
+    banco = mover_cancelados_al_final(banco)
+    ingresos_out = mover_cancelados_al_final(ing["df"])
+    egresos_out = mover_cancelados_al_final(egr["df"])
+
+    return banco, ingresos_out, egresos_out

@@ -10,6 +10,7 @@ from .config import (
     EGRESO_CONCEPTO_CANDIDATES
 )
 from .preprocessing import pick_column, to_money, to_date
+from .utils_orden import mover_cancelados_al_final
 
 
 def conciliar_egresos_vs_banco(
@@ -17,16 +18,10 @@ def conciliar_egresos_vs_banco(
     banco: pd.DataFrame,
     tolerancia: float = 1.0
 ):
-    # =============================
-    # COLUMNAS BANCO
-    # =============================
     col_cargo = pick_column(banco, CARGO_COL_CANDIDATES)
     col_fecha_banco = pick_column(banco, FECHA_COL_CANDIDATES)
     col_desc_banco = pick_column(banco, DESCRIP_COL_CANDIDATES)
 
-    # =============================
-    # COLUMNAS EGRESOS
-    # =============================
     col_monto_egr = pick_column(egresos, EGRESO_MONTO_CANDIDATES)
     col_fecha_egr = pick_column(egresos, EGRESO_FECHA_CANDIDATES)
     col_conc_egr = pick_column(egresos, EGRESO_CONCEPTO_CANDIDATES)
@@ -35,87 +30,65 @@ def conciliar_egresos_vs_banco(
         ["FORMA PAGO", "FORMA DE PAGO", "METODO DE PAGO"]
     )
 
-    if not col_cargo or not col_monto_egr:
-        raise ValueError("No se encontraron columnas necesarias para egresos")
-
-    # =============================
-    # NORMALIZAR BANCO
-    # =============================
     banco = banco.copy()
     banco[col_cargo] = to_money(banco[col_cargo]).abs()
     banco[col_fecha_banco] = to_date(banco[col_fecha_banco])
 
-    # =============================
-    # NORMALIZAR EGRESOS
-    # =============================
     egresos = egresos.copy()
     egresos[col_monto_egr] = to_money(egresos[col_monto_egr]).abs()
 
     if col_fecha_egr:
-        egresos[col_fecha_egr] = to_date(egresos[col_fecha_egr])
+        egresos["_FECHA_EMISION_DT"] = to_date(egresos[col_fecha_egr])
+    else:
+        egresos["_FECHA_EMISION_DT"] = pd.NaT
 
-    # =============================
-    # COLUMNAS RESULTADO
-    # =============================
     egresos["CONCILIADO_BANCO"] = "NO"
     egresos["ESTADO_EGRESO"] = "NO PAGADO"
     egresos["FECHA_DE_PAGO"] = ""
     egresos["OBSERVACION"] = ""
 
-    # =============================
-    # CONCILIACIÓN
-    # =============================
     for i, e in egresos.iterrows():
         monto = e.get(col_monto_egr)
-
         if pd.isna(monto):
             continue
 
-        # ==================================================
-        # 1️⃣ EFECTIVO → NO PAGADO (regla absoluta)
-        # ==================================================
+        # ✅ EFECTIVO → PAGADO OTRO (SIN FECHA)
         if col_forma_pago:
-            forma = str(e.get(col_forma_pago, "")).upper()
-            if "EFECTIVO" in forma or "01" in forma:
-                egresos.at[i, "ESTADO_EGRESO"] = "NO PAGADO"
-                egresos.at[i, "OBSERVACION"] = "Forma de pago EFECTIVO"
+            forma = str(e.get(col_forma_pago, "")).upper().strip()
+            if "EFECTIVO" in forma or forma == "01":
+                egresos.at[i, "CONCILIADO_BANCO"] = "SI"
+                egresos.at[i, "ESTADO_EGRESO"] = "PAGADO OTRO"
+                egresos.at[i, "FECHA_DE_PAGO"] = ""
+                egresos.at[i, "OBSERVACION"] = "Pago en efectivo (no bancario)"
                 continue
 
-        # ==================================================
-        # 2️⃣ BUSCAR EN BANCO POR MONTO + FECHA + TEXTO
-        # ==================================================
         candidatos = banco[
             (banco[col_cargo] - monto).abs() <= tolerancia
-        ].copy()
+        ]
 
         if candidatos.empty:
             continue
 
         candidatos = candidatos[pd.notna(candidatos[col_fecha_banco])]
-        if candidatos.empty:
-            continue
 
-        # -----------------------------
-        # Scoring
-        # -----------------------------
-        def score_row(row):
-            score = 0.0
-
-            # fecha válida
-            score += 1000
-
-            if col_fecha_egr and pd.notna(e.get(col_fecha_egr)):
-                diff_days = abs((e[col_fecha_egr] - row[col_fecha_banco]).days)
-                score += max(0, 300 - diff_days)
-
+        def score(row):
+            s = 1000
+            if col_fecha_egr and pd.notna(e["_FECHA_EMISION_DT"]):
+                s += max(
+                    0,
+                    300 - abs(
+                        (e["_FECHA_EMISION_DT"] - row[col_fecha_banco]).days
+                    )
+                )
             if col_conc_egr and col_desc_banco:
-                score += fuzz.token_set_ratio(
+                s += fuzz.token_set_ratio(
                     str(e.get(col_conc_egr, "")),
                     str(row.get(col_desc_banco, ""))
                 )
-            return score
+            return s
 
-        candidatos["__SCORE__"] = candidatos.apply(score_row, axis=1)
+        candidatos = candidatos.copy()
+        candidatos["__SCORE__"] = candidatos.apply(score, axis=1)
         best = candidatos.sort_values("__SCORE__", ascending=False).iloc[0]
 
         egresos.at[i, "CONCILIADO_BANCO"] = "SI"
@@ -123,10 +96,16 @@ def conciliar_egresos_vs_banco(
         egresos.at[i, "FECHA_DE_PAGO"] = best[col_fecha_banco].strftime("%d/%m/%Y")
         egresos.at[i, "OBSERVACION"] = "Conciliado con estado de cuenta"
 
+    egresos.drop(columns=["_FECHA_EMISION_DT"], inplace=True, errors="ignore")
+
+    # 🔹 ORDEN FINAL
+    egresos = mover_cancelados_al_final(egresos)
+
     resumen = {
-        "Egresos totales": int(len(egresos)),
-        "Pagados": int((egresos["ESTADO_EGRESO"] == "PAGADO").sum()),
-        "No pagados": int((egresos["ESTADO_EGRESO"] == "NO PAGADO").sum())
+        "Egresos totales": len(egresos),
+        "Pagados": (egresos["ESTADO_EGRESO"] == "PAGADO").sum(),
+        "Pagados otro": (egresos["ESTADO_EGRESO"] == "PAGADO OTRO").sum(),
+        "No pagados": (egresos["ESTADO_EGRESO"] == "NO PAGADO").sum(),
     }
 
     return egresos, resumen

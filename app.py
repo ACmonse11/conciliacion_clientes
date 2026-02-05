@@ -139,18 +139,18 @@ if st.button("Conciliar"):
     st.success("Conciliación terminada ✅")
 
     st.divider()
-    st.subheader("Vista previa - Estado de Cuenta conciliado (primeras 50 filas)")
-    st.dataframe(banco_out.head(50), use_container_width=True)
+    st.subheader("Vista previa - Estado de Cuenta conciliado")
+    st.dataframe(banco_out.head(100), use_container_width=True)
 
-    st.subheader("Vista previa - Ingresos (ACUMULADO actualizado) (primeras 50 filas)")
-    st.dataframe(ingresos_out.head(50), use_container_width=True)
+    st.subheader("Vista previa - Ingresos (HOJA DE ACUMULADO)")
+    st.dataframe(ingresos_out.head(100), use_container_width=True)
 
     if ingresos_complementos is not None:
-        st.subheader("Vista previa - Ingresos (COMPLEMENTOS original) (primeras 50 filas)")
-        st.dataframe(ingresos_complementos.head(50), use_container_width=True)
+        st.subheader("Vista previa - Ingresos (HOJA DE COMPLEMENTOS)")
+        st.dataframe(ingresos_complementos.head(100), use_container_width=True)
 
-    st.subheader("Vista previa - Egresos (ACUMULADO actualizado) (primeras 50 filas)")
-    st.dataframe(egresos_out.head(50), use_container_width=True)
+    st.subheader("Vista previa - Egresos (ACUMULADO actualizado)")
+    st.dataframe(egresos_out.head(100), use_container_width=True)
 
     # =====================================
     # ===== DESCARGAS
