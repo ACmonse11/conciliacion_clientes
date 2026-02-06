@@ -55,8 +55,9 @@ def conciliar_ppd_desde_complementos(
     col_folio_fact = pick_column(banco, ["FOLIO FACTURA"]) or "FOLIO FACTURA"
     col_fecha_fact = pick_column(banco, ["FECHA FACTURA"]) or "FECHA FACTURA"
     col_folio_cp_out = pick_column(banco, ["FOLIO COMPLEMENTO DE PAGO"]) or "FOLIO COMPLEMENTO DE PAGO"
-    col_fecha_cp_out = pick_column(banco, ["FECHA COMPLEMENTO DE PAGO"]) or "FECHA COMPLEMENTO DE PAGO"
+    col_fecha_cp_out = pick_column(banco, ["FECHA COMPLEMENTO DE PAGO", "FCHA COMPLEMENTO DE PAGO"]) or "FECHA COMPLEMENTO DE PAGO"
 
+    #* Reutilizar columnas existentes (evita duplicados)
     for c in [col_folio_fact, col_fecha_fact, col_folio_cp_out, col_fecha_cp_out]:
         if c not in banco.columns:
             banco[c] = ""
@@ -91,9 +92,12 @@ def conciliar_ppd_desde_complementos(
 
         # 🔑 BUSCAR EN BANCO
         movs = banco[
-            (~banco["_USADO_PPD_"]) &
             (banco[col_abono].notna()) &
-            ((banco[col_abono] - monto).abs() <= tolerancia)
+            ((banco[col_abono] - monto).abs() <= tolerancia) &
+            (
+                banco[col_folio_cp_out].isna() |
+                (banco[col_folio_cp_out] == "")
+            )
         ]
 
         if movs.empty:

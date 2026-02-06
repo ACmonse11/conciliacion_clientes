@@ -7,6 +7,8 @@ from src.export import to_excel_bytes, to_excel_multiple_sheets
 from src.reconcile_estado_cuenta import conciliar_estado_cuenta_con_movimientos
 from src.reconcile_ppd_complementos import conciliar_ppd_desde_complementos
 from src.reconcile_ingresos_abonos import conciliar_ingresos_con_abonos
+from src.complementos import agrupar_complementos_por_folio
+
 
 # =====================================
 # CONFIGURACIÓN STREAMLIT
@@ -40,6 +42,12 @@ tolerancia = st.number_input(
     step=0.01
 )
 
+if tolerancia < 0.01:
+    st.warning(
+        "⚠️ Se recomienda una tolerancia mínima de 0.01 por precisión decimal "
+        "(los montos pueden no coincidir exactamente en memoria)."
+    )
+
 # =====================================
 # BOTÓN
 # =====================================
@@ -65,7 +73,7 @@ if st.button("Conciliar"):
         st.stop()
 
     ingresos_acumulado = ingresos_sheets["ACUMULADO"]
-    ingresos_complementos = ingresos_sheets.get("COMPLEMENTOS")  # puede existir o no
+    ingresos_complementos = ingresos_sheets.get("Complementos") 
 
     # =====================================
     # ===== EGRESOS (TODAS LAS HOJAS)
@@ -113,9 +121,14 @@ if st.button("Conciliar"):
 
         # 2) PPD desde COMPLEMENTOS (si existe hoja)
         if ingresos_complementos is not None and not ingresos_complementos.empty:
+            #* NUEVO PASO: agrupar complementos por FOLIO
+            complementos_agrupados = agrupar_complementos_por_folio(
+                ingresos_complementos
+            )
+
             banco_out, ingresos_out = conciliar_ppd_desde_complementos(
                 ingresos_acumulado=ingresos_out,
-                complementos=ingresos_complementos,
+                complementos=complementos_agrupados,
                 banco=banco_out,
                 tolerancia=tolerancia
             )
