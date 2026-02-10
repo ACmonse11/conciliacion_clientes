@@ -70,6 +70,9 @@ def conciliar_egresos_vs_banco(
             continue
 
         candidatos = candidatos[pd.notna(candidatos[col_fecha_banco])]
+        
+        if candidatos.empty:
+            continue
 
         def score(row):
             s = 1000
