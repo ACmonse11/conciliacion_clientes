@@ -111,6 +111,92 @@ def conciliar_estado_cuenta_con_movimientos(
     ing = _prepare(ingresos)
     egr = _prepare(egresos_conciliados)
 
+    #* Para poder hacer la conciliacion de los UUID relacionados
+    def _to_money_scalar(x) -> float:
+        # Convierte valores individuales (no Series) a float seguro
+        return float(pd.to_numeric(str(x).replace(",", ""), errors="coerce"))
+
+    df_egr = egr["df"]
+
+    col_tipo_egr = pick_column(df_egr, ["TIPO"])
+    col_uuid_egr = pick_column(df_egr, ["UUID"])
+    col_uuid_rel = pick_column(df_egr, ["UUIDS RELACIONADOS"])
+    col_total_egr = pick_column(df_egr, ["TOTAL"])
+    col_folio_egr = pick_column(df_egr, ["FOLIO"])
+
+    # Solo si existen columnas necesarias
+    if all([col_tipo_egr, col_uuid_egr, col_uuid_rel, col_total_egr, col_folio_egr, col_cargo]):
+
+        # Índice rápido por UUID (misma hoja)
+        uuid_index = (
+            df_egr[[col_uuid_egr]]
+            .astype(str)
+            .apply(lambda s: s.str.strip())
+        )
+        df_egr["_UUID_NORM_"] = uuid_index[col_uuid_egr]
+
+        # Para buscar relacionados rápido
+        lookup = df_egr.set_index("_UUID_NORM_", drop=False)
+
+        for _, row in df_egr.iterrows():
+            tipo = str(row.get(col_tipo_egr, "")).upper().strip()
+
+            # Solo filas de egreso
+            if "EGRESO" not in tipo:
+                continue
+
+            uuid_rel_val = str(row.get(col_uuid_rel, "")).strip()
+            if not uuid_rel_val:
+                continue
+
+            # Buscar dentro del mismo DF por UUID relacionado
+            if uuid_rel_val not in lookup.index:
+                continue
+
+            row_rel = lookup.loc[uuid_rel_val]
+            # Si por alguna razón hay duplicados de UUID, toma el primero
+            if isinstance(row_rel, pd.DataFrame):
+                row_rel = row_rel.iloc[0]
+
+            total_rel = _to_money_scalar(row_rel.get(col_total_egr))
+            total_egr = _to_money_scalar(row.get(col_total_egr))
+
+            if pd.isna(total_rel) or pd.isna(total_egr):
+                continue
+
+            # neto = ingreso_relacionado - egreso
+            print("Normal:", total_rel, "Relacionado:", total_egr)
+            monto_final = round(abs(total_rel) - abs(total_egr), 2)
+
+            # Buscar en banco por CARGO (ej. 5498)
+            cand_banco = banco[
+                (banco[col_cargo].notna()) &
+                ((banco[col_cargo] - monto_final).abs() <= tolerancia)
+            ]
+
+            if cand_banco.empty:
+                continue
+
+            # Tomar el primer match
+            mov = cand_banco.iloc[0]
+
+            def _clean_folio(x):
+                if pd.isna(x):
+                    return ""
+                try:
+                    return str(int(float(x)))
+                except:
+                    return str(x).strip()
+
+            folio_rel = _clean_folio(row_rel.get(col_folio_egr))
+            folio_egr = _clean_folio(row.get(col_folio_egr))
+
+            if folio_rel and folio_egr:
+                banco.at[mov.name, col_folio_fact] = f"{folio_rel}-{folio_egr}"
+
+        # limpiar helper
+        df_egr.drop(columns=["_UUID_NORM_"], inplace=True, errors="ignore")
+
     def match(pack, monto, fecha_pago):
         df = pack["df"]
 
