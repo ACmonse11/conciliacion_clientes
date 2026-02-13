@@ -165,7 +165,6 @@ def conciliar_estado_cuenta_con_movimientos(
                 continue
 
             # neto = ingreso_relacionado - egreso
-            print("Normal:", total_rel, "Relacionado:", total_egr)
             monto_final = round(abs(total_rel) - abs(total_egr), 2)
 
             # Buscar en banco por CARGO (ej. 5498)
@@ -219,11 +218,11 @@ def conciliar_estado_cuenta_con_movimientos(
             metodo = _norm(row.get(pack["metodo"]))
             forma = _norm(row.get(pack["forma"]))
 
-            # Guardar primer PPD como fallback, pero NO usarlo todavía
-            if "PPD" in metodo:
+            #! Guardar primer PPD como fallback, pero NO usarlo todavía
+            """ if "PPD" in metodo:
                 if fallback_ppd is None:
                     fallback_ppd = (idx, row)
-                continue
+                continue """
 
             # Restricciones PUE (se marca NO PAGADO y se usa)
             if "PUE" in metodo and any(x in forma for x in RESTRICTED_PUE_FORMA):
@@ -232,7 +231,7 @@ def conciliar_estado_cuenta_con_movimientos(
                 df.at[idx, "_USADO_"] = True
                 return row, "NO_PAGADO", pack
 
-            # Normal PAGADO
+            #! Normal PAGADO Tanto para ingresos como egresos, sin importar método de pago (incluso PPD) 
             df.at[idx, pack["estado"]] = "PAGADO"
             df.at[idx, pack["fecha_pago"]] = (
                 fecha_pago.strftime("%d/%m/%Y") if pd.notna(fecha_pago) else ""
@@ -279,6 +278,11 @@ def conciliar_estado_cuenta_con_movimientos(
         else:
             banco.at[i, col_fecha_fact] = ""  # PPD / NO_PAGADO
 
+    # 🔹 Marcar ingresos no conciliados
+    df_ing = ing["df"]
+    mask_no_conciliado = ~df_ing["_USADO_"]
+    df_ing.loc[mask_no_conciliado, ing["estado"]] = "PENDIENTE DE IDENTIFICAR"     
+
     ing["df"].drop(columns=["_USADO_"], inplace=True, errors="ignore")
     egr["df"].drop(columns=["_USADO_"], inplace=True, errors="ignore")
 
@@ -286,5 +290,13 @@ def conciliar_estado_cuenta_con_movimientos(
     banco = mover_cancelados_al_final(banco)
     ingresos_out = mover_cancelados_al_final(ing["df"])
     egresos_out = mover_cancelados_al_final(egr["df"])
+
+    # 🔹 Formatear fechas para que no muestren hora
+    for df in [ingresos_out, egresos_out]:
+        if "FECHA DE PAGO" in df.columns:
+            df["FECHA DE PAGO"] = (
+                pd.to_datetime(df["FECHA DE PAGO"], errors="coerce", dayfirst=True)
+                .dt.strftime("%d/%m/%Y")
+            )
 
     return banco, ingresos_out, egresos_out
