@@ -116,7 +116,12 @@ def conciliar_ingresos_vs_banco(
             (disponibles[col_abono] - float(monto)).abs() <= float(tolerancia)
         ].copy()
 
+        # 🔴 NUEVO: marcar como NO PAGADO si no hay coincidencias
         if candidates.empty:
+            ingresos.at[i, "CONCILIADO_BANCO"] = "NO"
+            ingresos.at[i, "ESTADO_INGRESO"] = "NO PAGADO"
+            ingresos.at[i, "FECHA_DE_COBRO"] = ""
+            ingresos.at[i, "OBSERVACION"] = "No encontrado en estado de cuenta"
             continue
 
         if col_id_ing:

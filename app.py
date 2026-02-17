@@ -7,7 +7,7 @@ from src.export import to_excel_bytes, to_excel_multiple_sheets
 from src.reconcile_estado_cuenta import conciliar_estado_cuenta_con_movimientos
 from src.reconcile_ppd_complementos import conciliar_ppd_desde_complementos
 from src.reconcile_ingresos_abonos import conciliar_ingresos_con_abonos
-from src.reconcile_publico_general import conciliar_publico_en_general_por_suma
+from src.reconcile_publico_general import conciliar_publico_en_general_subset
 from src.complementos import agrupar_complementos_por_folio
 
 
@@ -137,7 +137,7 @@ if st.button("Conciliar"):
         )
 
         # 4) Público en General → SUMA de ABONOS
-        ingresos_out, banco_out = conciliar_publico_en_general_por_suma(
+        ingresos_out, banco_out = conciliar_publico_en_general_subset(
             ingresos=ingresos_out,
             banco=banco_out,
             tolerancia=tolerancia
