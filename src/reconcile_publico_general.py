@@ -5,6 +5,7 @@ def _norm_no_accents(s: str) -> str:
     s = str(s or "").strip().upper()
     return unicodedata.normalize("NFKD", s).encode("ASCII", "ignore").decode("ASCII")
 
+
 def conciliar_publico_en_general_subset(
     ingresos: pd.DataFrame,
     banco: pd.DataFrame,
