@@ -4,6 +4,7 @@ from .preprocessing import pick_column, to_money, to_date
 from .config import CARGO_COL_CANDIDATES, FECHA_COL_CANDIDATES, EGRESO_MONTO_CANDIDATES
 from .reconcile import conciliar_egresos_vs_banco
 from .utils_orden import mover_cancelados_al_final
+from .reconcile_publico_general import conciliar_publico_en_general_subset
 
 
 
@@ -277,6 +278,12 @@ def conciliar_estado_cuenta_con_movimientos(
                 banco.at[i, col_fecha_fact] = row[pack["fecha_em"]].strftime("%d/%m/%Y")
         else:
             banco.at[i, col_fecha_fact] = ""  # PPD / NO_PAGADO
+
+        ing["df"], banco = conciliar_publico_en_general_subset(
+            ingresos=ing["df"],
+            banco=banco,
+            tolerancia=tolerancia,
+        )
 
     # 🔹 Marcar ingresos no conciliados
     df_ing = ing["df"]

@@ -117,6 +117,10 @@ def conciliar_ingresos_vs_banco(
         ].copy()
 
         if candidates.empty:
+            ingresos.at[i, "CONCILIADO_BANCO"] = "NO"
+            ingresos.at[i, "ESTADO_INGRESO"] = "NO PAGADO"
+            ingresos.at[i, "FECHA_DE_COBRO"] = ""
+            ingresos.at[i, "OBSERVACION"] = "No encontrado en estado de cuenta"
             continue
 
         if col_id_ing:
