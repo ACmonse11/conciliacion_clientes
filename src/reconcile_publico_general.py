@@ -51,9 +51,6 @@ def conciliar_publico_en_general_subset(
     banco[col_abono] = pd.to_numeric(banco[col_abono], errors="coerce").fillna(0).abs().round(2)
     banco[col_fecha_banco] = pd.to_datetime(banco[col_fecha_banco], errors="coerce")
 
-    # =============================
-    # CONCILIACIÓN POR SUMA
-    # =============================
     for i, ing in ingresos.iterrows():
 
         estado = _norm_no_accents(ing.get(col_estado, ""))
