@@ -279,16 +279,16 @@ def conciliar_estado_cuenta_con_movimientos(
         else:
             banco.at[i, col_fecha_fact] = ""  # PPD / NO_PAGADO
 
-        ing["df"], banco = conciliar_publico_en_general_subset(
-            ingresos=ing["df"],
-            banco=banco,
-            tolerancia=tolerancia,
-        )
+            ing["df"], banco = conciliar_publico_en_general_subset(
+                ingresos=ing["df"],
+                banco=banco,
+                tolerancia=tolerancia,
+            )
 
     # 🔹 Marcar ingresos no conciliados
     df_ing = ing["df"]
     mask_no_conciliado = ~df_ing["_USADO_"]
-    df_ing.loc[mask_no_conciliado, ing["estado"]] = "PENDIENTE DE IDENTIFICAR"     
+    df_ing.loc[mask_no_conciliado, ing["estado"]] = "PENDIENTE DE IDENTIFICAR"
 
     ing["df"].drop(columns=["_USADO_"], inplace=True, errors="ignore")
     egr["df"].drop(columns=["_USADO_"], inplace=True, errors="ignore")
