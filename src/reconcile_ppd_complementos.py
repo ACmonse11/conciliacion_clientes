@@ -68,8 +68,8 @@ def conciliar_ppd_desde_complementos(
     complementos[col_importe_pag] = to_money(complementos[col_importe_pag]).abs()
     banco[col_abono] = to_money(banco[col_abono]).abs()
 
-    if col_fecha_doc:
-        complementos[col_fecha_doc] = to_date(complementos[col_fecha_doc])
+    """ if col_fecha_doc:
+        complementos[col_fecha_doc] = to_date(complementos[col_fecha_doc]) """
     if col_fecha_cp:
         complementos[col_fecha_cp] = to_date(complementos[col_fecha_cp])
     if col_fecha_banco:
@@ -110,10 +110,11 @@ def conciliar_ppd_desde_complementos(
         if pd.isna(banco.at[mov.name, col_folio_fact]) or banco.at[mov.name, col_folio_fact] == "":
             banco.at[mov.name, col_folio_fact] = folio
 
-        if col_fecha_doc and (
-            pd.isna(banco.at[mov.name, col_fecha_fact]) or banco.at[mov.name, col_fecha_fact] == ""
-        ):
-            banco.at[mov.name, col_fecha_fact] = cp[col_fecha_doc].strftime("%d/%m/%Y")
+        if col_fecha_doc:
+            fecha_val = cp.get(col_fecha_doc)
+
+            if pd.notna(fecha_val) and str(fecha_val).strip() != "":
+                banco.at[mov.name, col_fecha_fact] = str(fecha_val)
 
         banco.at[mov.name, col_folio_cp_out] = cp[col_folio_cp]
 

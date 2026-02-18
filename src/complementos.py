@@ -2,7 +2,6 @@ import pandas as pd
 from .preprocessing import pick_column, to_money, to_date
 
 #* Funcionalidad que busca los folios iguales en la hoja de complementos del archivo de ingresos
-
 def agrupar_complementos_por_folio(complementos: pd.DataFrame):
     complementos = complementos.copy()
     complementos.columns = complementos.columns.astype(str).str.upper().str.strip()
@@ -35,10 +34,25 @@ def agrupar_complementos_por_folio(complementos: pd.DataFrame):
         .groupby(col_folio, dropna=False)
         .agg({
             col_importe: "sum",
+            #* Para poner los dos folios que sale en la hoja de complemento desde ingresos
             col_folio_doc: lambda x: "-".join(
                 [str(v) for v in x if pd.notna(v)]
             ),
-            col_fecha_doc: "min",
+            #* Para poner las fechas que sale en la hoja de complemento desde ingresos
+            col_fecha_doc: lambda x: (
+                lambda fechas: (
+                    fechas[0]  # solo una fecha
+                    if len(fechas) == 1
+                    else f"{fechas[0]} - {fechas[-1]}"  # rango
+                )
+            )(
+                sorted(
+                    pd.to_datetime(x, errors="coerce")
+                    .dropna()
+                    .dt.strftime("%d/%m/%Y")
+                    .tolist()
+                )
+            ),
             col_fecha_cp: "min",
         })
         .reset_index()

@@ -113,7 +113,7 @@ def conciliar_publico_en_general_subset(
             .dt.strftime("%d/%m/%Y")
             .tolist()
         )
-        ingresos.at[i, col_fecha_pago] = " | ".join(fechas)
+        ingresos.at[i, col_fecha_pago] = " - ".join(fechas)
 
         # ✅ Poner folio real y fecha en banco
         folio_ingreso = ing.get(col_folio_ing, "") if col_folio_ing else ""

@@ -65,6 +65,7 @@ def conciliar_egresos_vs_banco(
         candidatos = banco[
             (banco[col_cargo] - monto).abs() <= tolerancia
         ]
+        print("Candidatos", candidatos.columns.tolist())
 
         if candidatos.empty:
             continue
