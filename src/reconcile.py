@@ -42,6 +42,7 @@ def conciliar_egresos_vs_banco(
     else:
         egresos["_FECHA_EMISION_DT"] = pd.NaT
 
+    # Columnas internas
     egresos["CONCILIADO_BANCO"] = "NO"
     egresos["ESTADO_EGRESO"] = "NO PAGADO"
     egresos["FECHA_DE_PAGO"] = ""
@@ -52,7 +53,7 @@ def conciliar_egresos_vs_banco(
         if pd.isna(monto):
             continue
 
-        # ✅ EFECTIVO → PAGADO OTRO (SIN FECHA)
+        # EFECTIVO → PAGADO OTRO
         if col_forma_pago:
             forma = str(e.get(col_forma_pago, "")).upper().strip()
             if "EFECTIVO" in forma or forma == "01":
@@ -65,13 +66,11 @@ def conciliar_egresos_vs_banco(
         candidatos = banco[
             (banco[col_cargo] - monto).abs() <= tolerancia
         ]
-        print("Candidatos", candidatos.columns.tolist())
 
         if candidatos.empty:
             continue
 
         candidatos = candidatos[pd.notna(candidatos[col_fecha_banco])]
-        
         if candidatos.empty:
             continue
 
@@ -100,16 +99,37 @@ def conciliar_egresos_vs_banco(
         egresos.at[i, "FECHA_DE_PAGO"] = best[col_fecha_banco].strftime("%d/%m/%Y")
         egresos.at[i, "OBSERVACION"] = "Conciliado con estado de cuenta"
 
+    # 🔹 SINCRONIZAR columnas originales
+    col_estado_original = pick_column(egresos, ["ESTADO DE PAGO", "ESTADO_PAGO"])
+    col_fecha_original = pick_column(egresos, ["FECHA DE PAGO", "FECHA_PAGO"])
+    col_obs_original = pick_column(egresos, ["OBSERVACIONES", "OBSERVACION"])
+
+    if col_estado_original:
+        egresos[col_estado_original] = egresos["ESTADO_EGRESO"]
+
+    if col_fecha_original:
+        egresos[col_fecha_original] = egresos["FECHA_DE_PAGO"]
+
+    if col_obs_original:
+        egresos[col_obs_original] = egresos["OBSERVACION"]
+
     egresos.drop(columns=["_FECHA_EMISION_DT"], inplace=True, errors="ignore")
 
-    # 🔹 ORDEN FINAL
+    # 🔹 Orden final
     egresos = mover_cancelados_al_final(egresos)
+
+    # 🔹 Eliminar columnas internas duplicadas (solo visual)
+    egresos.drop(
+        columns=["ESTADO_EGRESO", "FECHA_DE_PAGO", "OBSERVACION"],
+        errors="ignore",
+        inplace=True
+    )
 
     resumen = {
         "Egresos totales": len(egresos),
-        "Pagados": (egresos["ESTADO_EGRESO"] == "PAGADO").sum(),
-        "Pagados otro": (egresos["ESTADO_EGRESO"] == "PAGADO OTRO").sum(),
-        "No pagados": (egresos["ESTADO_EGRESO"] == "NO PAGADO").sum(),
+        "Pagados": (egresos[col_estado_original] == "PAGADO").sum() if col_estado_original else 0,
+        "Pagados otro": (egresos[col_estado_original] == "PAGADO OTRO").sum() if col_estado_original else 0,
+        "No pagados": (egresos[col_estado_original] == "NO PAGADO").sum() if col_estado_original else 0,
     }
 
     return egresos, resumen
