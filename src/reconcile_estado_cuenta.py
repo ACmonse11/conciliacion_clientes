@@ -1,6 +1,6 @@
 import re
 import pandas as pd
-
+import numpy as np
 from .preprocessing import pick_column, to_money, to_date
 from .config import CARGO_COL_CANDIDATES, FECHA_COL_CANDIDATES, EGRESO_MONTO_CANDIDATES
 from .reconcile import conciliar_egresos_vs_banco
@@ -144,27 +144,34 @@ def conciliar_estado_cuenta_con_movimientos(
     def _to_money_scalar(x) -> float:
         return float(pd.to_numeric(str(x).replace(",", ""), errors="coerce"))
 
+    #*Egresos
     df_egr = egr["df"]
-
     col_tipo_egr = pick_column(df_egr, ["TIPO"])
     col_uuid_egr = pick_column(df_egr, ["UUID"])
     col_uuid_rel = pick_column(df_egr, ["UUIDS RELACIONADOS"])
     col_total_egr = pick_column(df_egr, ["TOTAL"])
     col_folio_egr = pick_column(df_egr, ["FOLIO"])
 
+    #*Ingresos
+    df_ing = ing["df"]
+    col_tipo_ing = pick_column(df_ing, ["TIPO"])
+    col_uuid_ing = pick_column(df_ing, ["UUID"])
+    col_uuid_rel_ing = pick_column(df_ing, ["UUIDS RELACIONADOS"])
+    col_total_ing = pick_column(df_ing, ["TOTAL"])
+    col_folio_ing = pick_column(df_ing, ["FOLIO"])
+
+    #* Egresos
     if all([col_tipo_egr, col_uuid_egr, col_uuid_rel, col_total_egr, col_folio_egr, col_cargo]):
 
-        uuid_index = (
-            df_egr[[col_uuid_egr]]
-            .astype(str)
-            .apply(lambda s: s.str.strip())
-        )
-        df_egr["_UUID_NORM_"] = uuid_index[col_uuid_egr]
+        df_egr["_UUID_NORM_"] = df_egr[col_uuid_egr].astype(str).str.strip()
         lookup = df_egr.set_index("_UUID_NORM_", drop=False)
 
-        for _, row in df_egr.iterrows():
-            tipo = str(row.get(col_tipo_egr, "")).upper().strip()
-            if "EGRESO" not in tipo:
+        for idx, row in df_egr.iterrows():
+
+            tipo = str(row.get(col_tipo_egr, ""))
+            tipo_norm = re.sub(r"[^A-Z]", "", tipo.upper())
+
+            if "EGRESO" not in tipo_norm:
                 continue
 
             uuid_rel_val = str(row.get(col_uuid_rel, "")).strip()
@@ -188,28 +195,131 @@ def conciliar_estado_cuenta_con_movimientos(
 
             cand_banco = banco[
                 (banco[col_cargo].notna()) &
-                ((banco[col_cargo] - monto_final).abs() <= tolerancia)
+                (
+                    np.isclose(
+                        banco[col_cargo],
+                        monto_final,
+                        atol=tolerancia
+                    )
+                )
             ]
+
             if cand_banco.empty:
                 continue
 
             mov = cand_banco.iloc[0]
 
-            def _clean_folio(x):
-                if pd.isna(x):
-                    return ""
-                try:
-                    return str(int(float(x)))
-                except Exception:
-                    return str(x).strip()
+            # ========= FECHAS =========
+            fecha_original = ""
+            fecha_nota = ""
 
-            folio_rel = _clean_folio(row_rel.get(col_folio_egr))
-            folio_egr = _clean_folio(row.get(col_folio_egr))
+            if pd.notna(row_rel.get(egr["fecha_em"])):
+                fecha_original = row_rel[egr["fecha_em"]].strftime("%d/%m/%Y")
 
-            if folio_rel and folio_egr:
-                banco.at[mov.name, col_folio_fact] = f"{folio_rel}-{folio_egr}"
+            if pd.notna(row.get(egr["fecha_em"])):
+                fecha_nota = row[egr["fecha_em"]].strftime("%d/%m/%Y")
+
+            #* Separar las fechas con " - " si existen ambas
+            fechas_concat = " - ".join(
+                [f for f in [fecha_original, fecha_nota] if f]
+            )
+
+            # 🔥 Marcar banco
+            banco.at[mov.name, col_folio_fact] = f"{row_rel.get(col_folio_egr)}-{row.get(col_folio_egr)}"
+            banco.at[mov.name, col_fecha_fact] = fechas_concat
+
+            # 🔥 Marcar egreso nota crédito como PAGADO
+            df_egr.at[idx, egr["estado"]] = "NOTA DE CREDITO"
+            df_egr.at[idx, egr["fecha_pago"]] = mov[col_fecha_banco].strftime("%d/%m/%Y")
+            df_egr.at[idx, "_USADO_"] = True
+
+            # 🔥 Marcar factura original como PAGADO
+            mask_original = df_egr[col_uuid_egr].astype(str).str.strip() == uuid_rel_val
+
+            df_egr.loc[mask_original, egr["estado"]] = "PAGADO"
+            df_egr.loc[mask_original, egr["fecha_pago"]] = mov[col_fecha_banco].strftime("%d/%m/%Y")
+            df_egr.loc[mask_original, "_USADO_"] = True
 
         df_egr.drop(columns=["_UUID_NORM_"], inplace=True, errors="ignore")
+
+    #*Ingresos    
+    if all([col_tipo_ing, col_uuid_ing, col_uuid_rel_ing, col_total_ing, col_folio_ing, col_abono]):
+
+        df_ing["_UUID_NORM_"] = df_ing[col_uuid_ing].astype(str).str.strip()
+        lookup_ing = df_ing.set_index("_UUID_NORM_", drop=False)
+
+        for idx, row in df_ing.iterrows():
+
+            tipo = str(row.get(col_tipo_ing, ""))
+            tipo_norm = re.sub(r"[^A-Z]", "", tipo.upper())
+
+            # 🔥 Solo aplicar cuando sea NOTA DE CREDITO (Egreso)
+            if "EGRESO" not in tipo_norm:
+                continue
+
+            uuid_rel_val = str(row.get(col_uuid_rel_ing, "")).strip()
+            if not uuid_rel_val:
+                continue
+
+            if uuid_rel_val not in lookup_ing.index:
+                continue
+
+            row_rel = lookup_ing.loc[uuid_rel_val]
+            if isinstance(row_rel, pd.DataFrame):
+                row_rel = row_rel.iloc[0]
+
+            total_original = abs(_to_money_scalar(row_rel.get(col_total_ing)))
+            total_nota = abs(_to_money_scalar(row.get(col_total_ing)))
+
+            monto_final = round(total_original - total_nota, 2)
+
+            cand_banco = banco[
+                (banco[col_abono].notna()) &
+                (
+                    np.isclose(
+                        banco[col_abono],
+                        monto_final,
+                        atol=tolerancia
+                    )
+                )
+            ]
+
+            if cand_banco.empty:
+                continue
+
+            mov = cand_banco.iloc[0]
+
+            # ========= FECHAS =========
+            fecha_original = ""
+            fecha_nota = ""
+
+            if pd.notna(row_rel.get(ing["fecha_em"])):
+                fecha_original = row_rel[ing["fecha_em"]].strftime("%d/%m/%Y")
+
+            if pd.notna(row.get(ing["fecha_em"])):
+                fecha_nota = row[ing["fecha_em"]].strftime("%d/%m/%Y")
+
+            fechas_concat = " - ".join(
+                [f for f in [fecha_original, fecha_nota] if f]
+            )
+
+            # ========= BANCO =========
+            banco.at[mov.name, col_folio_fact] = f"{row_rel.get(col_folio_ing)}-{row.get(col_folio_ing)}"
+            banco.at[mov.name, col_fecha_fact] = fechas_concat
+
+            # ========= MARCAR NOTA =========
+            df_ing.at[idx, ing["estado"]] = "NOTA DE CREDITO"
+            df_ing.at[idx, ing["fecha_pago"]] = mov[col_fecha_banco].strftime("%d/%m/%Y")
+            df_ing.at[idx, "_USADO_"] = True
+
+            # ========= MARCAR FACTURA ORIGINAL =========
+            mask_original = df_ing[col_uuid_ing].astype(str).str.strip() == uuid_rel_val
+
+            df_ing.loc[mask_original, ing["estado"]] = "PAGADO"
+            df_ing.loc[mask_original, ing["fecha_pago"]] = mov[col_fecha_banco].strftime("%d/%m/%Y")
+            df_ing.loc[mask_original, "_USADO_"] = True
+
+        df_ing.drop(columns=["_UUID_NORM_"], inplace=True, errors="ignore")
 
     # =========================================================
     # MATCH
@@ -217,9 +327,15 @@ def conciliar_estado_cuenta_con_movimientos(
     def match(pack, monto, fecha_pago):
         df = pack["df"]
 
+        # 🔥 Detectar si existe MONTO_AJUSTADO
+        monto_col = "MONTO_AJUSTADO" if "MONTO_AJUSTADO" in df.columns else pack["monto"]
+
         cand = df[
             (~df["_USADO_"]) &
-            ((df[pack["monto"]] - monto).abs() <= tolerancia)
+            (
+                (df[monto_col].round(2) - round(monto, 2)).abs()
+                <= tolerancia
+            )
         ]
 
         if cand.empty:

@@ -39,19 +39,11 @@ def agrupar_complementos_por_folio(complementos: pd.DataFrame):
                 [str(v) for v in x if pd.notna(v)]
             ),
             #* Para poner las fechas que sale en la hoja de complemento desde ingresos
-            col_fecha_doc: lambda x: (
-                lambda fechas: (
-                    fechas[0]  # solo una fecha
-                    if len(fechas) == 1
-                    else f"{fechas[0]} - {fechas[-1]}"  # rango
-                )
-            )(
-                sorted(
-                    pd.to_datetime(x, errors="coerce")
-                    .dropna()
-                    .dt.strftime("%d/%m/%Y")
-                    .tolist()
-                )
+            col_fecha_doc: lambda x: "-".join(
+                pd.to_datetime(x, errors="coerce")
+                .dropna()
+                .dt.strftime("%d/%m/%Y")
+                .tolist()
             ),
             col_fecha_cp: "min",
         })

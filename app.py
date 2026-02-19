@@ -9,6 +9,7 @@ from src.reconcile_ppd_complementos import conciliar_ppd_desde_complementos
 from src.reconcile_ingresos_abonos import conciliar_ingresos_con_abonos
 from src.reconcile_publico_general import conciliar_publico_en_general_subset
 from src.complementos import agrupar_complementos_por_folio
+from src.relaciones_uuid import aplicar_notas_credito_por_uuid
 
 
 # =====================================
@@ -95,6 +96,10 @@ if st.button("Conciliar"):
     else:
         st.error("El archivo de EGRESOS debe tener una hoja llamada 'ACUMULADO' o 'EGRESOS'")
         st.stop()
+
+    # 🔥 APLICAR NOTAS DE CRÉDITO AQUÍ (ahora sí existen ambos)
+    ingresos_acumulado = aplicar_notas_credito_por_uuid(ingresos_acumulado)
+    egresos_acumulado = aplicar_notas_credito_por_uuid(egresos_acumulado)
 
     # =====================================
     # BANCO

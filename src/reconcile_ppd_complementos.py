@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 from .preprocessing import pick_column, to_money, to_date
 
 
@@ -7,6 +8,7 @@ def conciliar_ppd_desde_complementos(
     ingresos_acumulado: pd.DataFrame,
     banco: pd.DataFrame,
     tolerancia: float = 0.01,
+    tipo_movimiento: str = "ABONO",  # "ABONO" para ingresos, "CARGO" para egresos
 ):
     banco = banco.copy()
     complementos = complementos.copy()
@@ -33,7 +35,7 @@ def conciliar_ppd_desde_complementos(
     col_fecha_cp = pick_column(complementos, ["FECHA EMISION", "FECHA COMPLEMENTO DE PAGO"])
 
     # ===============================
-    # COLUMNAS INGRESOS
+    # COLUMNAS INGRESOS / EGRESOS
     # ===============================
     col_folio_ing = pick_column(ingresos_acumulado, ["FOLIO"])
     col_estado = pick_column(ingresos_acumulado, ["ESTADO DE PAGO"])
@@ -48,9 +50,13 @@ def conciliar_ppd_desde_complementos(
         col_fecha_pago = "FECHA DE PAGO"
 
     # ===============================
-    # COLUMNAS BANCO
+    # COLUMNAS BANCO (DINÁMICO)
     # ===============================
-    col_abono = pick_column(banco, ["ABONO", "ABONOS"])
+    if tipo_movimiento.upper() == "ABONO":
+        col_mov = pick_column(banco, ["ABONO", "ABONOS"])
+    else:
+        col_mov = pick_column(banco, ["CARGO", "CARGOS"])
+
     col_fecha_banco = pick_column(banco, ["FECHA"])
     col_folio_fact = pick_column(banco, ["FOLIO FACTURA"]) or "FOLIO FACTURA"
     col_fecha_fact = pick_column(banco, ["FECHA FACTURA"]) or "FECHA FACTURA"
@@ -66,7 +72,7 @@ def conciliar_ppd_desde_complementos(
     # NORMALIZAR DATOS
     # ===============================
     complementos[col_importe_pag] = to_money(complementos[col_importe_pag]).abs()
-    banco[col_abono] = to_money(banco[col_abono]).abs()
+    banco[col_mov] = to_money(banco[col_mov]).abs()
 
     """ if col_fecha_doc:
         complementos[col_fecha_doc] = to_date(complementos[col_fecha_doc]) """
@@ -76,28 +82,29 @@ def conciliar_ppd_desde_complementos(
         banco[col_fecha_banco] = to_date(banco[col_fecha_banco])
 
     # ===============================
-    # PPD REAL: COMPLEMENTOS → BANCO → INGRESOS
+    # PPD REAL
     # ===============================
     for _, cp in complementos.iterrows():
+
         folio = cp[col_folio_doc]
         monto = cp[col_importe_pag]
 
         if pd.isna(monto) or monto <= 0:
             continue
 
-        # 🔑 VALIDAR QUE EL INGRESO EXISTE
-        # ✅ El ingreso puede NO existir en ACUMULADO (por ejemplo folios viejos)
-        mask_ing = ingresos_acumulado[col_folio_ing] == folio  # puede ser vacío y está bien
+        mask_ing = ingresos_acumulado[col_folio_ing] == folio
 
-
-        # 🔑 BUSCAR EN BANCO
+        # 🔎 Buscar movimiento en banco
         movs = banco[
-            (banco[col_abono].notna()) &
-            ((banco[col_abono] - monto).abs() <= tolerancia) &
+            (banco[col_mov].notna()) &
             (
-                banco[col_folio_cp_out].isna() |
-                (banco[col_folio_cp_out] == "")
-            )
+                np.isclose(
+                    banco[col_mov],
+                    monto,
+                    atol=tolerancia
+                )
+            ) &
+            (~banco["_USADO_PPD_"])
         ]
 
         if movs.empty:
@@ -105,31 +112,36 @@ def conciliar_ppd_desde_complementos(
 
         mov = movs.iloc[0]
 
-        # ---- BANCO
-        # ---- BANCO (manejo correcto de NaN)
+        # ===============================
+        # ACTUALIZAR BANCO
+        # ===============================
         if pd.isna(banco.at[mov.name, col_folio_fact]) or banco.at[mov.name, col_folio_fact] == "":
             banco.at[mov.name, col_folio_fact] = folio
 
         if col_fecha_doc:
             fecha_val = cp.get(col_fecha_doc)
-
             if pd.notna(fecha_val) and str(fecha_val).strip() != "":
                 banco.at[mov.name, col_fecha_fact] = str(fecha_val)
 
         banco.at[mov.name, col_folio_cp_out] = cp[col_folio_cp]
 
-        if col_fecha_cp:
+        if col_fecha_cp and pd.notna(cp[col_fecha_cp]):
             banco.at[mov.name, col_fecha_cp_out] = cp[col_fecha_cp].strftime("%d/%m/%Y")
 
         banco.at[mov.name, "_USADO_PPD_"] = True
 
-        # ---- INGRESOS
+        # ===============================
+        # ACTUALIZAR INGRESOS / EGRESOS
+        # ===============================
         if mask_ing.any():
             ingresos_acumulado.loc[mask_ing, col_estado] = "PAGADO"
-            ingresos_acumulado.loc[mask_ing, col_fecha_pago] = (
-                mov[col_fecha_banco].strftime("%d/%m/%Y")
-            )
+
+            if col_fecha_banco and pd.notna(mov[col_fecha_banco]):
+                ingresos_acumulado.loc[mask_ing, col_fecha_pago] = (
+                    mov[col_fecha_banco].strftime("%d/%m/%Y")
+                )
 
     banco.drop(columns=["_USADO_PPD_"], inplace=True, errors="ignore")
+
     return banco, ingresos_acumulado
 
