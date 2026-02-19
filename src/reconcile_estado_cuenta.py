@@ -390,6 +390,8 @@ def conciliar_estado_cuenta_con_movimientos(
             res = match(ing, b[col_abono], fecha_pago)
 
         if not res:
+            banco.at[i, col_folio_fact] = "NO LOCALIZADO"
+            banco.at[i, col_fecha_fact] = "NO LOCALIZADO"
             continue
 
         row, status, pack = res
