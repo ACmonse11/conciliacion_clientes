@@ -44,7 +44,7 @@ def conciliar_egresos_vs_banco(
 
     # Columnas internas
     egresos["CONCILIADO_BANCO"] = "NO"
-    egresos["ESTADO_EGRESO"] = "NO PAGADO"
+    egresos["ESTADO_EGRESO"] = "NO LOCALIZADO"
     egresos["FECHA_DE_PAGO"] = ""
     egresos["OBSERVACION"] = ""
 
@@ -129,7 +129,7 @@ def conciliar_egresos_vs_banco(
         "Egresos totales": len(egresos),
         "Pagados": (egresos[col_estado_original] == "PAGADO").sum() if col_estado_original else 0,
         "Pagados otro": (egresos[col_estado_original] == "PAGADO OTRO").sum() if col_estado_original else 0,
-        "No pagados": (egresos[col_estado_original] == "NO PAGADO").sum() if col_estado_original else 0,
+        "No localizados": (egresos[col_estado_original] == "NO LOCALIZADO").sum() if col_estado_original else 0,
     }
 
     return egresos, resumen

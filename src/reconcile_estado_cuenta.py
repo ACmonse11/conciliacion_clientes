@@ -120,7 +120,7 @@ def conciliar_estado_cuenta_con_movimientos(
 
     # =========================================================
     # ✅ MARCAR CANCELADOS DESDE EL INICIO (CLAVE)
-    # Esto evita que terminen como "PENDIENTE DE IDENTIFICAR"
+    # Esto evita que terminen como "NO LOCALIZADO"
     # =========================================================
     for pack in (ing, egr):
         dfp = pack["df"]
@@ -416,7 +416,7 @@ def conciliar_estado_cuenta_con_movimientos(
     # =========================================================
     df_ing = ing["df"]
     mask_no_conciliado = ~df_ing["_USADO_"]
-    df_ing.loc[mask_no_conciliado, ing["estado"]] = "PENDIENTE DE IDENTIFICAR"
+    df_ing.loc[mask_no_conciliado, ing["estado"]] = "NO LOCALIZADO"
 
     # =========================================================
     # Limpieza y orden final
