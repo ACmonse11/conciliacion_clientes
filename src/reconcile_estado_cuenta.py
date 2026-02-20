@@ -94,12 +94,15 @@ def conciliar_estado_cuenta_con_movimientos(
         raise ValueError("Banco: falta columna FECHA")
 
     col_folio_fact = pick_column(banco, ["FOLIO FACTURA"])
-    col_fecha_fact = pick_column(banco, ["FECHA FACTURA"])
+
+    col_fecha_fact = "FECHA FACTURA"
 
     if not col_folio_fact:
         col_folio_fact = _ensure_col(banco, "FOLIO FACTURA", "")
-    if not col_fecha_fact:
-        col_fecha_fact = _ensure_col(banco, "FECHA FACTURA", "")
+
+
+    if col_fecha_fact not in banco.columns:
+        banco[col_fecha_fact] = pd.NaT
 
     if col_cargo:
         banco[col_cargo] = to_money(banco[col_cargo]).abs()
@@ -107,6 +110,10 @@ def conciliar_estado_cuenta_con_movimientos(
         banco[col_abono] = to_money(banco[col_abono]).abs()
 
     banco[col_fecha_banco] = to_date(banco[col_fecha_banco])
+    print("Ejemplos NaT:")
+    print(banco.loc[banco[col_fecha_banco].isna(), col_fecha_banco].head())
+
+    print("Fechas NaT en banco:", banco[col_fecha_banco].isna().sum())
 
     # 🔹 1) Conciliación previa de egresos vs banco
     egresos_conciliados, _ = conciliar_egresos_vs_banco(
@@ -134,7 +141,7 @@ def conciliar_estado_cuenta_con_movimientos(
             )
             # Estado de pago = CANCELADO
             dfp.loc[mask_cancelado, pack["estado"]] = "CANCELADO"
-            dfp.loc[mask_cancelado, pack["fecha_pago"]] = ""
+            dfp.loc[mask_cancelado, pack["fecha_pago"]] = pd.NaT
             # marcar como usado para que no se pisen al final
             dfp.loc[mask_cancelado, "_USADO_"] = True
 
@@ -353,22 +360,27 @@ def conciliar_estado_cuenta_con_movimientos(
             # Restricciones PUE (se marca NO PAGADO y se usa)
             if "PUE" in metodo and any(x in forma for x in RESTRICTED_PUE_FORMA):
                 df.at[idx, pack["estado"]] = "NO PAGADO"
-                df.at[idx, pack["fecha_pago"]] = ""
+                df.at[idx, pack["fecha_pago"]] = pd.NaT
                 df.at[idx, "_USADO_"] = True
                 return row, "NO_PAGADO", pack
 
             # Normal PAGADO
             df.at[idx, pack["estado"]] = "PAGADO"
-            df.at[idx, pack["fecha_pago"]] = (
-                fecha_pago.strftime("%d/%m/%Y") if pd.notna(fecha_pago) else ""
-            )
+            fecha_real = fecha_pago  # ya viene del banco
+            if pd.notna(fecha_real):
+                df.at[idx, pack["fecha_pago"]] = fecha_real
+            else:
+                if pack["fecha_em"] and pd.notna(row.get(pack["fecha_em"])):
+                    df.at[idx, pack["fecha_pago"]] = row[pack["fecha_em"]]
+                else:
+                    df.at[idx, pack["fecha_pago"]] = pd.NaT
             df.at[idx, "_USADO_"] = True
             return row, "PAGADO", pack
 
         if fallback_ppd is not None:
             idx, row = fallback_ppd
             df.at[idx, pack["estado"]] = "NO PAGADO"
-            df.at[idx, pack["fecha_pago"]] = ""
+            df.at[idx, pack["fecha_pago"]] = pd.NaT
             df.at[idx, "_USADO_"] = True
             return row, "PPD", pack
 
@@ -391,7 +403,7 @@ def conciliar_estado_cuenta_con_movimientos(
 
         if not res:
             banco.at[i, col_folio_fact] = "NO LOCALIZADO"
-            banco.at[i, col_fecha_fact] = "NO LOCALIZADO"
+            banco.at[i, col_fecha_fact] = pd.NaT
             continue
 
         row, status, pack = res
@@ -405,7 +417,7 @@ def conciliar_estado_cuenta_con_movimientos(
             if pack["fecha_em"] and pd.notna(row.get(pack["fecha_em"])):
                 banco.at[i, col_fecha_fact] = row[pack["fecha_em"]].strftime("%d/%m/%Y")
         else:
-            banco.at[i, col_fecha_fact] = ""
+            banco.at[i, col_fecha_fact] = pd.NaT
 
             ing["df"], banco = conciliar_publico_en_general_subset(
                 ingresos=ing["df"],
@@ -432,9 +444,16 @@ def conciliar_estado_cuenta_con_movimientos(
 
     for df in [ingresos_out, egresos_out]:
         if "FECHA DE PAGO" in df.columns:
-            df["FECHA DE PAGO"] = (
-                pd.to_datetime(df["FECHA DE PAGO"], errors="coerce", dayfirst=True)
-                .dt.strftime("%d/%m/%Y")
+            df["FECHA DE PAGO"] = pd.to_datetime(
+                df["FECHA DE PAGO"],
+                errors="coerce",
+                dayfirst=True
             )
+        if "FECHA" in df.columns:
+            df["FECHA"] = pd.to_datetime(
+                df["FECHA"],
+                errors="coerce",
+                dayfirst=True
+            )    
 
     return banco, ingresos_out, egresos_out
