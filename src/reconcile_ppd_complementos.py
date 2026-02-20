@@ -125,6 +125,11 @@ def conciliar_ppd_desde_complementos(
 
         banco.at[mov.name, col_folio_cp_out] = cp[col_folio_cp]
 
+        if "OBSERVACIONES" not in banco.columns:
+            banco["OBSERVACIONES"] = ""
+
+        banco.at[mov.name, "OBSERVACIONES"] = "PAGADO POR MEDIO DE COMPLEMENTOS"
+
         if col_fecha_cp and pd.notna(cp[col_fecha_cp]):
             banco.at[mov.name, col_fecha_cp_out] = cp[col_fecha_cp].strftime("%d/%m/%Y")
 

@@ -38,6 +38,7 @@ def _prepare(df):
     col_fecha_em = pick_column(df, ["FECHA EMISION", "FECHA_EMISION"])
     col_metodo = pick_column(df, ["METODO PAGO", "METODO DE PAGO", "METODO_PAGO"])
     col_forma = pick_column(df, ["FORMA PAGO", "FORMA DE PAGO", "FORMA_PAGO"])
+    col_obs = pick_column(df, ["OBSERVACIONES", "OBSERVACION"])
 
     # Estado/fecha de pago (salida)
     col_estado_pago = pick_column(df, ["ESTADO DE PAGO", "ESTADO_PAGO"])
@@ -53,6 +54,9 @@ def _prepare(df):
         col_estado_pago = _ensure_col(df, "ESTADO DE PAGO", "")
     if not col_fecha_pago:
         col_fecha_pago = _ensure_col(df, "FECHA DE PAGO", "")
+
+    if not col_obs:
+        col_obs = _ensure_col(df, "OBSERVACIONES", "")
 
     df[col_monto] = to_money(df[col_monto]).abs()
 
@@ -73,7 +77,8 @@ def _prepare(df):
         "forma": col_forma,
         "estado": col_estado_pago,      # columna de salida: ESTADO DE PAGO
         "fecha_pago": col_fecha_pago,   # columna de salida: FECHA DE PAGO
-        "estado_cfdi": col_estado_cfdi  # columna real del CFDI: CANCELADO/VIGENTE/etc
+        "estado_cfdi": col_estado_cfdi,  # columna real del CFDI: CANCELADO/VIGENTE/etc
+        "obs": col_obs
     }
 
 
@@ -344,11 +349,24 @@ def conciliar_estado_cuenta_con_movimientos(
         if pack["fecha_em"]:
             cand = cand.sort_values(pack["fecha_em"])
 
-        fallback_ppd = None
+        """ fallback_ppd = None """
 
         for idx, row in cand.iterrows():
             metodo = _norm(row.get(pack["metodo"]))
             forma = _norm(row.get(pack["forma"]))
+
+            #* Si es PPD, se marca como PAGADO si la cantidad se encuentra en la hoja de COMPLEMENTOS y si esa cantidad en COMPLEMENTOS se encuentra en el estado de cuenta (banco)
+            if "PPD" in metodo:
+                df.at[idx, pack["estado"]] = "PAGADO"
+                df.at[idx, pack["fecha_pago"]] = (
+                    fecha_pago.strftime("%d/%m/%Y") if pd.notna(fecha_pago) else ""
+                )
+
+                if pack.get("obs"):
+                    df.at[idx, pack["obs"]] = "PAGADO POR MEDIO DE COMPLEMENTOS"
+                    
+                df.at[idx, "_USADO_"] = True
+                return row, "PAGADO", pack
 
             # Restricciones PUE (se marca NO PAGADO y se usa)
             if "PUE" in metodo and any(x in forma for x in RESTRICTED_PUE_FORMA):
@@ -365,12 +383,12 @@ def conciliar_estado_cuenta_con_movimientos(
             df.at[idx, "_USADO_"] = True
             return row, "PAGADO", pack
 
-        if fallback_ppd is not None:
+        """ if fallback_ppd is not None:
             idx, row = fallback_ppd
             df.at[idx, pack["estado"]] = "NO PAGADO"
             df.at[idx, pack["fecha_pago"]] = ""
             df.at[idx, "_USADO_"] = True
-            return row, "PPD", pack
+            return row, "PPD", pack """
 
         return None
 
@@ -390,15 +408,28 @@ def conciliar_estado_cuenta_con_movimientos(
             res = match(ing, b[col_abono], fecha_pago)
 
         if not res:
-            banco.at[i, col_folio_fact] = "NO LOCALIZADO"
-            banco.at[i, col_fecha_fact] = "NO LOCALIZADO"
+            obs_val = banco.at[i, "OBSERVACIONES"]
+
+            if pd.isna(obs_val) or str(obs_val).strip() == "":
+                banco.at[i, "OBSERVACIONES"] = "N/A"
             continue
 
         row, status, pack = res
 
+        if status == "PAGADO":
+            banco.at[i, "OBSERVACIONES"] = "CONCILIADO"
+        else:
+            obs_val = banco.at[i, "OBSERVACIONES"]
+
+            if pd.isna(obs_val) or str(obs_val).strip() == "":
+                banco.at[i, "OBSERVACIONES"] = "N/A"
+
         # Banco: FOLIO siempre
         if pack["folio"]:
-            banco.at[i, col_folio_fact] = row.get(pack["folio"], "")
+            folio_val = row.get(pack["folio"], "")
+            #* Evitar poner folios como 12345.0 y dejar solo 12345
+            if pd.notna(folio_val):
+                banco.at[i, col_folio_fact] = str(folio_val).replace(".0", "")
 
         # Banco: Fecha factura solo si PAGADO
         if status == "PAGADO":

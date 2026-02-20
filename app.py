@@ -9,7 +9,6 @@ from src.reconcile_ppd_complementos import conciliar_ppd_desde_complementos
 from src.reconcile_ingresos_abonos import conciliar_ingresos_con_abonos
 from src.reconcile_publico_general import conciliar_publico_en_general_subset
 from src.complementos import agrupar_complementos_por_folio
-from src.relaciones_uuid import aplicar_notas_credito_por_uuid
 
 
 # =====================================
@@ -89,17 +88,16 @@ if st.button("Conciliar"):
         df = df.loc[:, ~df.columns.str.contains("^UNNAMED", case=False)]
         egresos_sheets[sheet] = df
 
+    egresos_complementos = egresos_sheets.get("COMPLEMENTOS")
+
     if "ACUMULADO" in egresos_sheets:
         egresos_acumulado = egresos_sheets["ACUMULADO"]
     elif "EGRESOS" in egresos_sheets:
         egresos_acumulado = egresos_sheets["EGRESOS"]
     else:
-        st.error("El archivo de EGRESOS debe tener una hoja llamada 'ACUMULADO' o 'EGRESOS'")
+        st.error("El archivo de EGRESOS debe tener una hoja llamada 'ACUMULADO'")
         st.stop()
 
-    # 🔥 APLICAR NOTAS DE CRÉDITO AQUÍ (ahora sí existen ambos)
-    ingresos_acumulado = aplicar_notas_credito_por_uuid(ingresos_acumulado)
-    egresos_acumulado = aplicar_notas_credito_por_uuid(egresos_acumulado)
 
     # =====================================
     # BANCO
@@ -131,7 +129,20 @@ if st.button("Conciliar"):
                 ingresos_acumulado=ingresos_out,
                 complementos=complementos_agrupados,
                 banco=banco_out,
-                tolerancia=tolerancia
+                tolerancia=tolerancia,
+                tipo_movimiento="ABONO"
+            )
+        
+        # ✅ 2B) PPD desde COMPLEMENTOS (EGRESOS)
+        if egresos_complementos is not None and not egresos_complementos.empty:
+            complementos_agrupados_egr = agrupar_complementos_por_folio(egresos_complementos)
+
+            banco_out, egresos_out = conciliar_ppd_desde_complementos(
+                ingresos_acumulado=egresos_out,          # (sí, aquí va egresos_out)
+                complementos=complementos_agrupados_egr,
+                banco=banco_out,
+                tolerancia=tolerancia,
+                tipo_movimiento="CARGO",                 # 🔥 CLAVE
             )
 
         # 3) Ingresos directos vs ABONOS
@@ -166,12 +177,16 @@ if st.button("Conciliar"):
     st.subheader("Vista previa - Ingresos (ACUMULADO)")
     st.dataframe(ingresos_out.head(100), use_container_width=True)
 
-    if ingresos_complementos is not None:
+    """ if ingresos_complementos is not None:
         st.subheader("Vista previa - Ingresos (COMPLEMENTOS)")
-        st.dataframe(ingresos_complementos.head(100), use_container_width=True)
+        st.dataframe(ingresos_complementos.head(100), use_container_width=True) """
 
     st.subheader("Vista previa - Egresos (ACUMULADO)")
     st.dataframe(egresos_out.head(100), use_container_width=True)
+
+    """ if egresos_complementos is not None:
+        st.subheader("Vista previa - Egresos (COMPLEMENTOS)")
+        st.dataframe(egresos_complementos.head(100), use_container_width=True) """
 
     # =====================================
     # DESCARGAS
