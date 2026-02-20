@@ -16,7 +16,13 @@ def to_money(series):
 
 def to_date(series):
     # Primero intentar ISO / normal
-    fechas = pd.to_datetime(series, errors="coerce")
+    s = series.astype(str).str.strip()
+
+    fechas = pd.to_datetime(
+        s,
+        errors="coerce",
+        dayfirst=True
+    )
 
     mask = fechas.isna()
     if mask.any():

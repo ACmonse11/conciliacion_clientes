@@ -111,7 +111,11 @@ def conciliar_estado_cuenta_con_movimientos(
     if col_abono:
         banco[col_abono] = to_money(banco[col_abono]).abs()
 
-    banco[col_fecha_banco] = to_date(banco[col_fecha_banco])
+    banco[col_fecha_banco] = pd.to_datetime(
+        banco[col_fecha_banco],
+        errors="coerce",
+        dayfirst=True
+    )
 
     # 🔹 1) Conciliación previa de egresos vs banco
     egresos_conciliados, _ = conciliar_egresos_vs_banco(
@@ -380,6 +384,15 @@ def conciliar_estado_cuenta_con_movimientos(
             df.at[idx, pack["fecha_pago"]] = (
                 fecha_pago.strftime("%d/%m/%Y") if pd.notna(fecha_pago) else ""
             )
+
+            if "CONCILIADO_BANCO" in df.columns:
+                df.at[idx, "CONCILIADO_BANCO"] = "SI"
+
+            if pack.get("obs"):
+                obs_actual = df.at[idx, pack["obs"]]
+                if pd.isna(obs_actual) or str(obs_actual).strip() == "":
+                    df.at[idx, pack["obs"]] = "Conciliado con estado de cuenta"
+
             df.at[idx, "_USADO_"] = True
             return row, "PAGADO", pack
 
@@ -467,5 +480,15 @@ def conciliar_estado_cuenta_con_movimientos(
                 pd.to_datetime(df["FECHA DE PAGO"], errors="coerce", dayfirst=True)
                 .dt.strftime("%d/%m/%Y")
             )
+
+    if col_fecha_banco in banco.columns:
+        banco[col_fecha_banco] = (
+            pd.to_datetime(banco[col_fecha_banco], errors="coerce")
+            .dt.strftime("%d/%m/%Y")
+            .astype(str)
+        )
+
+    print("uno",banco[col_fecha_banco].dtype)
+    print("dos",banco[col_fecha_banco].head())
 
     return banco, ingresos_out, egresos_out

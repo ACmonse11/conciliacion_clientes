@@ -172,7 +172,16 @@ if st.button("Conciliar"):
 
     st.divider()
     st.subheader("Vista previa - Estado de Cuenta conciliado")
-    st.dataframe(banco_out.head(100), use_container_width=True)
+
+    banco_out_display = banco_out.copy()
+
+    if "FECHA" in banco_out_display.columns:
+        banco_out_display["FECHA"] = (
+            pd.to_datetime(banco_out_display["FECHA"], errors="coerce")
+            .dt.strftime("%d/%m/%Y")
+        )
+
+    st.dataframe(banco_out_display.head(100), use_container_width=True)
 
     st.subheader("Vista previa - Ingresos (ACUMULADO)")
     st.dataframe(ingresos_out.head(100), use_container_width=True)
@@ -194,8 +203,17 @@ if st.button("Conciliar"):
     st.divider()
     st.subheader("Descargar archivos")
 
+    banco_export = banco_out.copy()
+
+    for col in banco_export.columns:
+        if "FECHA" in col.upper():
+            banco_export[col] = (
+                pd.to_datetime(banco_export[col], errors="coerce")
+                .dt.strftime("%d/%m/%Y")
+            )
+
     banco_excel = to_excel_bytes(
-        banco_out,
+        banco_export,
         sheet_name="ESTADO_CUENTA_CONCILIADO"
     )
 
