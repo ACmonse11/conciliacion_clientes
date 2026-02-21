@@ -84,6 +84,13 @@ def conciliar_ppd_desde_complementos(
     # ===============================
     # PPD REAL
     # ===============================
+
+    if "FOLIO CP" not in ingresos_acumulado.columns:
+        ingresos_acumulado["FOLIO CP"] = ""
+
+    if "FECHA CP" not in ingresos_acumulado.columns:
+        ingresos_acumulado["FECHA CP"] = ""
+
     for _, cp in complementos.iterrows():
 
         folio = cp[col_folio_doc]
@@ -92,7 +99,16 @@ def conciliar_ppd_desde_complementos(
         if pd.isna(monto) or monto <= 0:
             continue
 
-        mask_ing = ingresos_acumulado[col_folio_ing] == folio
+        folio_norm = str(folio).replace(".0", "").strip()
+
+        mask_ing = (
+            ingresos_acumulado[col_folio_ing]
+            .astype(str)
+            .str.replace(".0", "", regex=False)
+            .str.strip()
+            ==
+            folio_norm
+        )
 
         # 🔎 Buscar movimiento en banco
         movs = banco[
@@ -141,10 +157,24 @@ def conciliar_ppd_desde_complementos(
         if mask_ing.any():
             ingresos_acumulado.loc[mask_ing, col_estado] = "PAGADO"
 
-            if col_fecha_banco and pd.notna(mov[col_fecha_banco]):
-                ingresos_acumulado.loc[mask_ing, col_fecha_pago] = (
-                    mov[col_fecha_banco].strftime("%d/%m/%Y")
-                )
+        if col_fecha_banco and pd.notna(mov[col_fecha_banco]):
+            ingresos_acumulado.loc[mask_ing, col_fecha_pago] = (
+                mov[col_fecha_banco].strftime("%d/%m/%Y")
+            )
+
+        # 🔥 NUEVA FUNCIONALIDAD
+        if "FOLIO CP" not in ingresos_acumulado.columns:
+            ingresos_acumulado["FOLIO CP"] = ""
+
+        if "FECHA CP" not in ingresos_acumulado.columns:
+            ingresos_acumulado["FECHA CP"] = ""
+
+        ingresos_acumulado.loc[mask_ing, "FOLIO CP"] = cp[col_folio_cp]
+
+        if col_fecha_cp and pd.notna(cp[col_fecha_cp]):
+            ingresos_acumulado.loc[mask_ing, "FECHA CP"] = (
+                cp[col_fecha_cp].strftime("%d/%m/%Y")
+            )
 
     banco.drop(columns=["_USADO_PPD_"], inplace=True, errors="ignore")
 
