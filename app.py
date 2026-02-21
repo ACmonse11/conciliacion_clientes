@@ -7,6 +7,9 @@ from src.export import to_excel_bytes, to_excel_multiple_sheets
 from src.reconcile_estado_cuenta import conciliar_estado_cuenta_con_movimientos
 from src.reconcile_ppd_complementos import conciliar_ppd_desde_complementos
 from src.reconcile_ingresos_abonos import conciliar_ingresos_con_abonos
+from src.reconcile_publico_general import conciliar_publico_en_general_subset
+from src.complementos import agrupar_complementos_por_folio
+
 
 # =====================================
 # CONFIGURACIÓN STREAMLIT
@@ -40,6 +43,12 @@ tolerancia = st.number_input(
     step=0.01
 )
 
+if tolerancia < 0.01:
+    st.warning(
+        "⚠️ Se recomienda una tolerancia mínima de 0.01 por precisión decimal "
+        "(los montos pueden no coincidir exactamente en memoria)."
+    )
+
 # =====================================
 # BOTÓN
 # =====================================
@@ -49,7 +58,7 @@ if st.button("Conciliar"):
         st.stop()
 
     # =====================================
-    # ===== INGRESOS (TODAS LAS HOJAS)
+    # INGRESOS (TODAS LAS HOJAS)
     # =====================================
     xls_ing = pd.ExcelFile(ingresos_file)
     ingresos_sheets = {}
@@ -65,10 +74,10 @@ if st.button("Conciliar"):
         st.stop()
 
     ingresos_acumulado = ingresos_sheets["ACUMULADO"]
-    ingresos_complementos = ingresos_sheets.get("COMPLEMENTOS")  # puede existir o no
+    ingresos_complementos = ingresos_sheets.get("COMPLEMENTOS")
 
     # =====================================
-    # ===== EGRESOS (TODAS LAS HOJAS)
+    # EGRESOS (TODAS LAS HOJAS)
     # =====================================
     xls_egr = pd.ExcelFile(egresos_file)
     egresos_sheets = {}
@@ -79,31 +88,30 @@ if st.button("Conciliar"):
         df = df.loc[:, ~df.columns.str.contains("^UNNAMED", case=False)]
         egresos_sheets[sheet] = df
 
-    if "ACUMULADO" not in egresos_sheets and "EGRESOS" not in egresos_sheets:
-        st.error("El archivo de EGRESOS debe tener una hoja llamada 'ACUMULADO o EGRESOS'")
-        st.stop()
+    egresos_complementos = egresos_sheets.get("COMPLEMENTOS")
 
     if "ACUMULADO" in egresos_sheets:
         egresos_acumulado = egresos_sheets["ACUMULADO"]
     elif "EGRESOS" in egresos_sheets:
         egresos_acumulado = egresos_sheets["EGRESOS"]
     else:
-        st.error("El archivo de EGRESOS debe tener una hoja llamada 'ACUMULADO' o 'EGRESOS'")
+        st.error("El archivo de EGRESOS debe tener una hoja llamada 'ACUMULADO'")
         st.stop()
 
+
     # =====================================
-    # ===== BANCO
+    # BANCO
     # =====================================
     banco = read_excel_any(banco_file)
     banco = banco.loc[:, ~banco.columns.str.contains("^UNNAMED", case=False)]
     banco.columns = banco.columns.astype(str).str.upper().str.strip()
 
-
     # =====================================
-    # ===== CONCILIACIONES
+    # CONCILIACIONES
     # =====================================
     with st.spinner("Conciliando información..."):
-        # 1) Conciliación principal: Estado de cuenta ↔ (Ingresos ACUMULADO + Egresos ACUMULADO)
+
+        # 1) Estado de cuenta ↔ Ingresos + Egresos
         banco_out, ingresos_out, egresos_out = conciliar_estado_cuenta_con_movimientos(
             banco=banco,
             ingresos=ingresos_acumulado,
@@ -111,55 +119,101 @@ if st.button("Conciliar"):
             tolerancia=tolerancia
         )
 
-        # 2) PPD desde COMPLEMENTOS (si existe hoja)
+        # 2) PPD desde COMPLEMENTOS
         if ingresos_complementos is not None and not ingresos_complementos.empty:
-            banco_out, ingresos_out = conciliar_ppd_desde_complementos(
-                ingresos_acumulado=ingresos_out,
-                complementos=ingresos_complementos,
-                banco=banco_out,
-                tolerancia=tolerancia
+            complementos_agrupados = agrupar_complementos_por_folio(
+                ingresos_complementos
             )
 
-        # 3) Ingresos directos vs ABONOS del banco: marcar PAGADO + FECHA DE PAGO
+            banco_out, ingresos_out = conciliar_ppd_desde_complementos(
+                ingresos_acumulado=ingresos_out,
+                complementos=complementos_agrupados,
+                banco=banco_out,
+                tolerancia=tolerancia,
+                tipo_movimiento="ABONO"
+            )
+        
+        # ✅ 2B) PPD desde COMPLEMENTOS (EGRESOS)
+        if egresos_complementos is not None and not egresos_complementos.empty:
+            complementos_agrupados_egr = agrupar_complementos_por_folio(egresos_complementos)
+
+            banco_out, egresos_out = conciliar_ppd_desde_complementos(
+                ingresos_acumulado=egresos_out,          # (sí, aquí va egresos_out)
+                complementos=complementos_agrupados_egr,
+                banco=banco_out,
+                tolerancia=tolerancia,
+                tipo_movimiento="CARGO",                 # 🔥 CLAVE
+            )
+
+        # 3) Ingresos directos vs ABONOS
         ingresos_out = conciliar_ingresos_con_abonos(
             ingresos=ingresos_out,
             banco=banco_out,
             tolerancia=tolerancia
         )
 
+        # 4) Público en General → SUMA de ABONOS
+        ingresos_out, banco_out = conciliar_publico_en_general_subset(
+            ingresos=ingresos_out,
+            banco=banco_out,
+            tolerancia=tolerancia
+        )
+
     # =====================================
-    # ===== REEMPLAZAR HOJAS ACTUALIZADAS (SIN BORRAR LAS DEMÁS)
+    # REEMPLAZAR HOJAS
     # =====================================
     ingresos_sheets["ACUMULADO"] = ingresos_out
     egresos_sheets["ACUMULADO"] = egresos_out
 
     # =====================================
-    # ===== VISTAS PREVIAS
+    # VISTAS PREVIAS
     # =====================================
     st.success("Conciliación terminada ✅")
 
     st.divider()
     st.subheader("Vista previa - Estado de Cuenta conciliado")
-    st.dataframe(banco_out.head(100), use_container_width=True)
 
-    st.subheader("Vista previa - Ingresos (HOJA DE ACUMULADO)")
+    banco_out_display = banco_out.copy()
+
+    if "FECHA" in banco_out_display.columns:
+        banco_out_display["FECHA"] = (
+            pd.to_datetime(banco_out_display["FECHA"], errors="coerce")
+            .dt.strftime("%d/%m/%Y")
+        )
+
+    st.dataframe(banco_out_display.head(100), use_container_width=True)
+
+    st.subheader("Vista previa - Ingresos (ACUMULADO)")
     st.dataframe(ingresos_out.head(100), use_container_width=True)
 
-    if ingresos_complementos is not None:
-        st.subheader("Vista previa - Ingresos (HOJA DE COMPLEMENTOS)")
-        st.dataframe(ingresos_complementos.head(100), use_container_width=True)
+    """ if ingresos_complementos is not None:
+        st.subheader("Vista previa - Ingresos (COMPLEMENTOS)")
+        st.dataframe(ingresos_complementos.head(100), use_container_width=True) """
 
-    st.subheader("Vista previa - Egresos (ACUMULADO actualizado)")
+    st.subheader("Vista previa - Egresos (ACUMULADO)")
     st.dataframe(egresos_out.head(100), use_container_width=True)
 
+    """ if egresos_complementos is not None:
+        st.subheader("Vista previa - Egresos (COMPLEMENTOS)")
+        st.dataframe(egresos_complementos.head(100), use_container_width=True) """
+
     # =====================================
-    # ===== DESCARGAS
+    # DESCARGAS
     # =====================================
     st.divider()
     st.subheader("Descargar archivos")
 
+    banco_export = banco_out.copy()
+
+    for col in banco_export.columns:
+        if "FECHA" in col.upper():
+            banco_export[col] = (
+                pd.to_datetime(banco_export[col], errors="coerce")
+                .dt.strftime("%d/%m/%Y")
+            )
+
     banco_excel = to_excel_bytes(
-        banco_out,
+        banco_export,
         sheet_name="ESTADO_CUENTA_CONCILIADO"
     )
 
