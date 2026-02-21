@@ -15,15 +15,22 @@ def to_money(series):
     return pd.to_numeric(s, errors="coerce")
 
 def to_date(series):
-    # Primero intentar ISO / normal
     s = series.astype(str).str.strip()
 
-    fechas = pd.to_datetime(
-        s,
-        errors="coerce",
-        dayfirst=True
-    )
+    # 1️⃣ Intentar parseo automático
+    fechas = pd.to_datetime(s, errors="coerce")
 
+    # 2️⃣ Si falló, intentar dayfirst
+    mask = fechas.isna()
+    if mask.any():
+        fechas_dayfirst = pd.to_datetime(
+            s[mask],
+            errors="coerce",
+            dayfirst=True
+        )
+        fechas.loc[mask] = fechas_dayfirst
+
+    # 3️⃣ Si sigue fallando, intentar número Excel
     mask = fechas.isna()
     if mask.any():
         numeric = pd.to_numeric(series, errors="coerce")

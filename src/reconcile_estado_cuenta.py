@@ -111,11 +111,7 @@ def conciliar_estado_cuenta_con_movimientos(
     if col_abono:
         banco[col_abono] = to_money(banco[col_abono]).abs()
 
-    banco[col_fecha_banco] = pd.to_datetime(
-        banco[col_fecha_banco],
-        errors="coerce",
-        dayfirst=True
-    )
+    banco[col_fecha_banco] = to_date(banco[col_fecha_banco])
 
     # 🔹 1) Conciliación previa de egresos vs banco
     egresos_conciliados, _ = conciliar_egresos_vs_banco(
@@ -448,14 +444,8 @@ def conciliar_estado_cuenta_con_movimientos(
         if status == "PAGADO":
             if pack["fecha_em"] and pd.notna(row.get(pack["fecha_em"])):
                 banco.at[i, col_fecha_fact] = row[pack["fecha_em"]].strftime("%d/%m/%Y")
-        else:
-            banco.at[i, col_fecha_fact] = ""
 
-            ing["df"], banco = conciliar_publico_en_general_subset(
-                ingresos=ing["df"],
-                banco=banco,
-                tolerancia=tolerancia,
-            )
+            
 
     # =========================================================
     # Marcar ingresos no conciliados (sin pisar CANCELADOS)
@@ -482,13 +472,8 @@ def conciliar_estado_cuenta_con_movimientos(
             )
 
     if col_fecha_banco in banco.columns:
-        banco[col_fecha_banco] = (
-            pd.to_datetime(banco[col_fecha_banco], errors="coerce")
-            .dt.strftime("%d/%m/%Y")
-            .astype(str)
+        banco[col_fecha_banco] = banco[col_fecha_banco].apply(
+            lambda x: x.strftime("%d/%m/%Y") if pd.notna(x) else ""
         )
-
-    print("uno",banco[col_fecha_banco].dtype)
-    print("dos",banco[col_fecha_banco].head())
 
     return banco, ingresos_out, egresos_out
