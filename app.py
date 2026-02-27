@@ -207,10 +207,7 @@ if st.button("Conciliar"):
 
     for col in banco_export.columns:
         if "FECHA" in col.upper():
-            banco_export[col] = (
-                pd.to_datetime(banco_export[col], errors="coerce")
-                .dt.strftime("%d/%m/%Y")
-            )
+            banco_export[col] = banco_export[col].astype(str)
 
     banco_excel = to_excel_bytes(
         banco_export,
