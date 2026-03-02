@@ -101,13 +101,17 @@ def conciliar_ppd_desde_complementos(
 
         folio_norm = str(folio).replace(".0", "").strip()
 
+        folios_cp = [f.strip() for f in folio_norm.split("-")]
+
+        print("Folio complemento:", repr(folio_norm))
+        print("Folios ingresos únicos:", ingresos_acumulado[col_folio_ing].astype(str).unique())
+
         mask_ing = (
             ingresos_acumulado[col_folio_ing]
-            .astype(str)
-            .str.replace(".0", "", regex=False)
-            .str.strip()
-            ==
-            folio_norm
+                .astype(str)
+                .str.replace(".0", "", regex=False)
+                .str.strip()
+                .isin(folios_cp)
         )
 
         # 🔎 Buscar movimiento en banco
@@ -156,6 +160,12 @@ def conciliar_ppd_desde_complementos(
         # ===============================
         if mask_ing.any():
             ingresos_acumulado.loc[mask_ing, col_estado] = "PAGADO"
+        
+        # 🔥 AGREGAR OBSERVACIÓN EN INGRESOS
+        ingresos_acumulado.loc[
+            mask_ing,
+            "OBSERVACIONES"
+        ] = "PAGADO POR MEDIO DE COMPLEMENTOS"
 
         if col_fecha_banco and pd.notna(mov[col_fecha_banco]):
             ingresos_acumulado.loc[mask_ing, col_fecha_pago] = (
