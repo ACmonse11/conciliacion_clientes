@@ -343,6 +343,15 @@ def conciliar_estado_cuenta_con_movimientos(
             )
         ]
 
+        # 🔥 EXCLUIR PUE + EFECTIVO del match bancario
+        if pack["metodo"] and pack["forma"]:
+            cand = cand[
+                ~(
+                    cand[pack["metodo"]].astype(str).str.upper().str.contains("PUE", na=False) &
+                    cand[pack["forma"]].astype(str).str.upper().str.contains("EFECTIVO", na=False)
+                )
+            ]
+
         if cand.empty:
             return None
 
