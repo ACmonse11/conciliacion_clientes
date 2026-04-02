@@ -6,7 +6,7 @@ def ensure_text_cols(df, cols):
     for c in cols:
         if c not in df.columns:
             df[c] = ""
-        df[c] = df[c].astype(str)
+        df[c] = df[c].astype(object)
 
 
 def conciliar_ppd_desde_complementos(
@@ -85,12 +85,13 @@ def conciliar_ppd_desde_complementos(
     col_folio_cp_out = pick_column(banco, ["FOLIO COMPLEMENTO DE PAGO"]) or "FOLIO COMPLEMENTO DE PAGO"
     col_fecha_cp_out = pick_column(banco, ["FECHA COMPLEMENTO DE PAGO", "FCHA COMPLEMENTO DE PAGO"]) or "FECHA COMPLEMENTO DE PAGO"
 
-    banco[col_fecha_cp_out] = banco[col_fecha_cp_out].astype(str)
 
     #* Reutilizar columnas existentes (evita duplicados)
     for c in [col_folio_fact, col_fecha_fact, col_folio_cp_out, col_fecha_cp_out]:
         if c not in banco.columns:
             banco[c] = ""
+
+    banco[col_fecha_cp_out] = banco[col_fecha_cp_out].astype(str)
 
     ensure_text_cols(banco, [
         col_folio_fact,
@@ -189,6 +190,7 @@ def conciliar_ppd_desde_complementos(
         if mask_ing.any():
             ingresos_acumulado.loc[mask_ing, col_estado] = "PAGADO"
         
+        ensure_text_cols(ingresos_acumulado, ["OBSERVACIONES"])
         # 🔥 AGREGAR OBSERVACIÓN EN INGRESOS
         ingresos_acumulado.loc[
             mask_ing,
