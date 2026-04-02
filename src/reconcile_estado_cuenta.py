@@ -116,6 +116,7 @@ def conciliar_estado_cuenta_con_movimientos(
 
     banco[col_fecha_banco] = to_date(banco[col_fecha_banco])
     banco["_USADO_"] = False
+    banco["OBSERVACIONES"] = banco["OBSERVACIONES"].astype(str)
 
     # 🔹 1) Conciliación previa de egresos vs banco
     egresos_conciliados, _ = conciliar_egresos_vs_banco(
