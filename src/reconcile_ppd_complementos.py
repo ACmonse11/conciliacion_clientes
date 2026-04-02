@@ -63,6 +63,8 @@ def conciliar_ppd_desde_complementos(
     col_folio_cp_out = pick_column(banco, ["FOLIO COMPLEMENTO DE PAGO"]) or "FOLIO COMPLEMENTO DE PAGO"
     col_fecha_cp_out = pick_column(banco, ["FECHA COMPLEMENTO DE PAGO", "FCHA COMPLEMENTO DE PAGO"]) or "FECHA COMPLEMENTO DE PAGO"
 
+    banco[col_fecha_cp_out] = banco[col_fecha_cp_out].astype(str)
+
     #* Reutilizar columnas existentes (evita duplicados)
     for c in [col_folio_fact, col_fecha_fact, col_folio_cp_out, col_fecha_cp_out]:
         if c not in banco.columns:
