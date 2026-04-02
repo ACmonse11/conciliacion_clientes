@@ -112,6 +112,7 @@ def conciliar_estado_cuenta_con_movimientos(
         banco[col_abono] = to_money(banco[col_abono]).abs()
 
     banco[col_fecha_banco] = to_date(banco[col_fecha_banco])
+    banco["_USADO_"] = False
 
     # 🔹 1) Conciliación previa de egresos vs banco
     egresos_conciliados, _ = conciliar_egresos_vs_banco(
@@ -121,6 +122,20 @@ def conciliar_estado_cuenta_con_movimientos(
     )
 
     ing = _prepare(ingresos)
+    # Agrupar ingresos por FOLIO (hoja ACUMULADO)
+    df_ing = ing["df"]
+
+    grupos_folio = {}
+
+    if ing["folio"]:
+
+        for folio_val, g in df_ing.groupby(ing["folio"]):
+
+            grupos_folio[folio_val] = {
+                "total_pagado": round(g[ing["monto"]].sum(), 2),
+                "idxs": g.index.tolist()
+            }
+
     egr = _prepare(egresos_conciliados)
 
     # =========================================================
@@ -164,6 +179,7 @@ def conciliar_estado_cuenta_con_movimientos(
     col_uuid_rel_ing = pick_column(df_ing, ["UUIDS RELACIONADOS"])
     col_total_ing = pick_column(df_ing, ["TOTAL"])
     col_folio_ing = pick_column(df_ing, ["FOLIO"])
+    col_folio_doc = pick_column(df_ing, ["FOLIO DOCUMENTO", "FOLIO_DOC", "FOLIO FACTURA"])
 
     #* Egresos
     if all([col_tipo_egr, col_uuid_egr, col_uuid_rel, col_total_egr, col_folio_egr, col_cargo]):
@@ -343,6 +359,15 @@ def conciliar_estado_cuenta_con_movimientos(
             )
         ]
 
+        # 🔥 EXCLUIR PUE + EFECTIVO del match bancario
+        if pack["metodo"] and pack["forma"]:
+            cand = cand[
+                ~(
+                    cand[pack["metodo"]].astype(str).str.upper().str.contains("PUE", na=False) &
+                    cand[pack["forma"]].astype(str).str.upper().str.contains("EFECTIVO", na=False)
+                )
+            ]
+
         if cand.empty:
             return None
 
@@ -404,45 +429,114 @@ def conciliar_estado_cuenta_con_movimientos(
     # =========================================================
     # RECORRER BANCO Y CONCILIAR
     # =========================================================
-    for i, b in banco.iterrows():
+    for i, b in banco[~banco["_USADO_"]].iterrows():
+
         fecha_pago = b[col_fecha_banco]
+
+        conciliado = False
+
+        monto_banco = None
+
+        if col_cargo and pd.notna(b.get(col_cargo)):
+            monto_banco = round(b[col_cargo], 2)
+
+        if col_abono and pd.notna(b.get(col_abono)):
+            monto_banco = round(b[col_abono], 2)
+
+        if monto_banco is None:
+            continue
+
+        # =========================================================
+        # BUSCAR COINCIDENCIA POR FOLIO ACUMULADO
+        # =========================================================
+        for folio_val, data in grupos_folio.items():
+
+            total = data["total_pagado"]
+
+            if abs(total - monto_banco) <= tolerancia:
+
+                idxs = data["idxs"]
+
+                folios_doc = []
+                fechas = []
+
+                for idx in idxs:
+
+                    row = df_ing.loc[idx]
+
+                    if pd.notna(row.get(col_folio_doc)):
+                        folios_doc.append(str(row[col_folio_doc]))
+
+                    if pd.notna(row.get(ing["fecha_em"])):
+                        fechas.append(
+                            row[ing["fecha_em"]].strftime("%d/%m/%Y")
+                        )
+
+                    df_ing.at[idx, "_USADO_"] = True
+                    df_ing.at[idx, ing["estado"]] = "PAGADO"
+                    df_ing.at[idx, ing["fecha_pago"]] = (
+                        fecha_pago.strftime("%d/%m/%Y")
+                        if pd.notna(fecha_pago)
+                        else ""
+                    )
+
+                banco.at[i, col_folio_fact] = "-".join(folios_doc)
+                banco.at[i, col_fecha_fact] = "-".join(fechas)
+                banco.at[i, "OBSERVACIONES"] = "CONCILIADO"
+
+                banco.at[i, "_USADO_"] = True
+
+                conciliado = True
+
+                break
+
+        if conciliado:
+            continue
+
+        # =========================================================
+        # FALLBACK A MATCH NORMAL
+        # =========================================================
         res = None
 
-        # EGRESOS → CARGOS
         if col_cargo and pd.notna(b.get(col_cargo)) and b[col_cargo] > 0:
             res = match(egr, b[col_cargo], fecha_pago)
 
-        # INGRESOS → ABONOS
         if not res and col_abono and pd.notna(b.get(col_abono)) and b[col_abono] > 0:
             res = match(ing, b[col_abono], fecha_pago)
 
         if not res:
+
             obs_val = banco.at[i, "OBSERVACIONES"]
 
             if pd.isna(obs_val) or str(obs_val).strip() == "":
                 banco.at[i, "OBSERVACIONES"] = "N/A"
+
             continue
 
         row, status, pack = res
 
         if status == "PAGADO":
             banco.at[i, "OBSERVACIONES"] = "CONCILIADO"
-        else:
-            obs_val = banco.at[i, "OBSERVACIONES"]
 
-            if pd.isna(obs_val) or str(obs_val).strip() == "":
-                banco.at[i, "OBSERVACIONES"] = "N/A"
-
-        # Banco: FOLIO siempre
         if pack["folio"]:
-            folio_val = row.get(pack["folio"], "")
-            #* Evitar poner folios como 12345.0 y dejar solo 12345
-            if pd.notna(folio_val):
-                banco.at[i, col_folio_fact] = str(folio_val).replace(".0", "")
 
-        # Banco: Fecha factura solo si PAGADO
+            actual = banco.at[i, col_folio_fact]
+
+            if pd.isna(actual) or str(actual).strip() == "":
+
+                folio_val = row.get(pack["folio"])
+
+                if pd.notna(folio_val):
+
+                    if isinstance(folio_val, (int, float)):
+                        folio_val = int(folio_val)
+
+                    banco.at[i, col_folio_fact] = str(folio_val)
+
         if status == "PAGADO":
+
             if pack["fecha_em"] and pd.notna(row.get(pack["fecha_em"])):
+
                 banco.at[i, col_fecha_fact] = row[pack["fecha_em"]].strftime("%d/%m/%Y")
 
             
