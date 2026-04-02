@@ -109,6 +109,9 @@ def conciliar_estado_cuenta_con_movimientos(
     if not col_fecha_fact:
         col_fecha_fact = _ensure_col(banco, "FECHA FACTURA", "")
 
+    banco[col_folio_fact] = banco[col_folio_fact].astype(str)
+    banco[col_fecha_fact] = banco[col_fecha_fact].astype(str)   
+
     if col_cargo:
         banco[col_cargo] = to_money(banco[col_cargo]).abs()
     if col_abono:
