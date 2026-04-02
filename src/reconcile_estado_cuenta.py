@@ -55,6 +55,9 @@ def _prepare(df):
     if not col_fecha_pago:
         col_fecha_pago = _ensure_col(df, "FECHA DE PAGO", "")
 
+    df[col_estado_pago] = df[col_estado_pago].astype(str)
+    df[col_fecha_pago] = df[col_fecha_pago].astype(str)
+    
     if not col_obs:
         col_obs = _ensure_col(df, "OBSERVACIONES", "")
 
