@@ -2,6 +2,12 @@ import pandas as pd
 import numpy as np
 from .preprocessing import pick_column, to_money, to_date
 
+def ensure_text_cols(df, cols):
+    for c in cols:
+        if c not in df.columns:
+            df[c] = ""
+        df[c] = df[c].astype(str)
+
 
 def conciliar_ppd_desde_complementos(
     complementos: pd.DataFrame,
@@ -19,6 +25,17 @@ def conciliar_ppd_desde_complementos(
     # ===============================
     for df in (banco, complementos, ingresos_acumulado):
         df.columns = df.columns.astype(str).str.upper().str.strip()
+
+        # 🔥 BLINDAJE GLOBAL
+    ensure_text_cols(banco, [
+        "OBSERVACIONES",
+    ])
+
+    ensure_text_cols(ingresos_acumulado, [
+        "OBSERVACIONES",
+        "FOLIO CP",
+        "FECHA CP"
+    ])
 
     banco["_USADO_PPD_"] = False
 
@@ -49,6 +66,11 @@ def conciliar_ppd_desde_complementos(
         ingresos_acumulado["FECHA DE PAGO"] = ""
         col_fecha_pago = "FECHA DE PAGO"
 
+    ensure_text_cols(ingresos_acumulado, [
+        col_estado,
+        col_fecha_pago,
+    ])
+
     # ===============================
     # COLUMNAS BANCO (DINÁMICO)
     # ===============================
@@ -69,6 +91,13 @@ def conciliar_ppd_desde_complementos(
     for c in [col_folio_fact, col_fecha_fact, col_folio_cp_out, col_fecha_cp_out]:
         if c not in banco.columns:
             banco[c] = ""
+
+    ensure_text_cols(banco, [
+        col_folio_fact,
+        col_fecha_fact,
+        col_folio_cp_out,
+        col_fecha_cp_out
+    ])
 
     # ===============================
     # NORMALIZAR DATOS
@@ -104,9 +133,6 @@ def conciliar_ppd_desde_complementos(
         folio_norm = str(folio).replace(".0", "").strip()
 
         folios_cp = [f.strip() for f in folio_norm.split("-")]
-
-        print("Folio complemento:", repr(folio_norm))
-        print("Folios ingresos únicos:", ingresos_acumulado[col_folio_ing].astype(str).unique())
 
         mask_ing = (
             ingresos_acumulado[col_folio_ing]
